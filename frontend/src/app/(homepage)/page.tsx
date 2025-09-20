@@ -3,6 +3,11 @@ import { useEffect, useState } from "react";
 import { Agent } from "@/types/agent";
 import MapBox from "./_components/MapBox";
 import Dashboard from "./_components/Dashboard";
+import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
+import { cn } from "@/lib/utils";
+import { ShimmerButton } from "@/components/ui/shimmer-button";
+import { Pause, UserPlus } from "lucide-react";
+import Remote from "./_components/Remote";
 
 export default function Home() {
   const [agentsMap, setAgentsMap] = useState<Map<string, Agent>>(new Map());
@@ -46,9 +51,16 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="flex flex-col min-h-screen min-w-screen bg-black">
-      <MapBox agentsMap={agentsMap} />
-      <Dashboard />
+    <div className="flex flex-col min-h-screen min-w-screen">
+      {/* Desktop  */}
+      <div className="hidden sm:flex">
+        <MapBox agentsMap={agentsMap} />
+        <Dashboard />
+      </div>
+      {/* Mobile  */}
+      <div className="flex flex-col sm:hidden min-h-screen min-w-screen items-center justify-center gap-6 bg-black relative overflow-hidden">
+        <Remote />
+      </div>
     </div>
   );
 }

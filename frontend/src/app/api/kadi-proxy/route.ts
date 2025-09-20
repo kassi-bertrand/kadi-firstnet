@@ -1,5 +1,5 @@
 // app/api/kadi-proxy/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { KadiClient } from "@kadi.build/core";
 import type { Agent } from "@/types/agent";
 
@@ -45,7 +45,6 @@ async function initKadiClient() {
       });
     }
   });
-
   // 2) Batched positions for dashboards
   client.subscribeToEvent("world.positions.batch", (batch: any) => {
     if (!batch?.agents) return;
@@ -108,13 +107,31 @@ async function initKadiClient() {
   });
 }
 
-// GET handler
-export async function GET() {
+
+export async function GET(req: NextRequest) {
   await initKadiClient();
 
-  // Return batched agents for client to consume
+  // Parse query params
+  const url = new URL(req.url);
+  const action = url.searchParams.get("action"); // e.g., "addAgent"
+  const type = url.searchParams.get("type") as Agent["type"] | undefined; // optional
+
+  if (action === "addAgent" && client) {
+    await client.callTool('world-simulator', 'spawnAgent', {
+      agentId: "test20",
+      type: "civilian", // matches enum ["civilian", "firefighter", ...]
+      position: {       // must be "position", not "properties"
+        lat: 32.7767,
+        lon: -96.7970
+      },
+      status: "transporting", // matches enum ["available", "en_route", ...]
+      lifetime: 2000000           // milliseconds (or adjust as needed)
+    });
+  }
+  
+
   return NextResponse.json({
-    agents: Array.from(agentsMap.values()), // current snapshot
-    count: agentsMap.size,
+    agents: Array.from(agentsMap.values()),
+    actionPerformed: action ?? null,
   });
 }
