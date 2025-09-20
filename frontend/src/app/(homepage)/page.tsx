@@ -39,7 +39,7 @@ export default function Home() {
                 id,
                 latitude,
                 longitude,
-              });
+              } as Agent);
             }
           });
           return next;
