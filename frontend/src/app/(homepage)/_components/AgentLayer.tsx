@@ -17,7 +17,7 @@ interface AgentLayerProps {
 
 export default function AgentLayer({
   agentsMap,
-  speed = 0.005,
+  speed = 0.15,
 }: AgentLayerProps) {
   const [movingAgents, setMovingAgents] = useState<MovingAgent[]>([]);
   const rafRef = useRef<number>(0);

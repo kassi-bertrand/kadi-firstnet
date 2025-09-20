@@ -1,0 +1,199 @@
+{
+  "name": "world-simulator",
+  "kind": "ability",
+  "version": "0.0.1",
+  "license": "MIT",
+  "description": "Central authority for FirstNet Incident Commander emergency simulation - manages all agent positions, hazard evolution, and world state as single source of truth.",
+  "brokers": {
+    "local": "ws://localhost:8080",
+    "remote": "ws://kadi.build:8080"
+  },
+  "abilities": {},
+  "exports": [
+    {
+      "name": "whatDoISee",
+      "description": "List nearby agents, hazards, and exits visible to the agent",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" },
+          "visionRange": { "type": "number" }
+        },
+        "required": ["agentId", "visionRange"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "type": "string", "enum": ["civilian", "firefighter", "ems", "police", "commander", "human_civilian"] },
+                "distance": { "type": "number" },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+                    "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+                  },
+                  "required": ["lat", "lon"]
+                },
+                "isMoving": { "type": "boolean" },
+                "status": { "type": "string", "enum": ["available", "en_route", "on_scene", "transporting", "staging", "out_of_service"] }
+              },
+              "required": ["id", "type", "distance", "position", "isMoving", "status"]
+            }
+          },
+          "hazards": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "type": "string", "enum": ["fire", "hazmat", "structural_collapse", "medical_emergency", "weather"] },
+                "distance": { "type": "number" },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+                    "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+                  },
+                  "required": ["lat", "lon"]
+                },
+                "intensity": { "type": "number" },
+                "radius": { "type": "number" }
+              },
+              "required": ["id", "type", "distance", "position", "intensity", "radius"]
+            }
+          },
+          "exits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "type": { "type": "string", "enum": ["exit", "hospital", "staging_area"] },
+                "distance": { "type": "number" },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+                    "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+                  },
+                  "required": ["lat", "lon"]
+                },
+                "name": { "type": "string" }
+              },
+              "required": ["id", "type", "distance", "position"]
+            }
+          },
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["agents", "hazards", "exits", "success"]
+      }
+    },
+    {
+      "name": "moveMe",
+      "description": "Start movement of an agent to a destination with a profile and urgency",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+              "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+            },
+            "required": ["lat", "lon"]
+          },
+          "profile": { "type": "string", "enum": ["walking", "driving"] },
+          "speed": { "type": "number" },
+          "urgency": { "type": "string", "enum": ["normal", "urgent", "emergency"] }
+        },
+        "required": ["agentId", "destination"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "estimatedArrival": { "type": "number" },
+          "estimatedDuration": { "type": "number" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
+    },
+    {
+      "name": "spawnAgent",
+      "description": "Spawn or register an agent in the world with initial state",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" },
+          "type": { "type": "string", "enum": ["civilian", "firefighter", "ems", "police", "commander", "human_civilian"] },
+          "position": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+              "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+            },
+            "required": ["lat", "lon"]
+          },
+          "status": { "type": "string", "enum": ["available", "en_route", "on_scene", "transporting", "staging", "out_of_service"] },
+          "lifetime": { "type": "number" }
+        },
+        "required": ["agentId", "type", "position"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
+    },
+    {
+      "name": "getAgentPosition",
+      "description": "Get the current position and status of an agent",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" }
+        },
+        "required": ["agentId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+              "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+            },
+            "required": ["lat", "lon"]
+          },
+          "moving": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["available", "en_route", "on_scene", "transporting", "staging", "out_of_service"] },
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
+    }
+  ],
+  "scripts": {
+    "preflight": "",
+    "setup": "npm install && npm run build",
+    "build": "tsc",
+    "start": "node dist/world-simulator.js",
+    "dev": "DEBUG=world-simulator tsx watch world-simulator.ts",
+    "stop": "",
+    "clean": "rm -rf node_modules dist && rm -rf abilities"
+  }
+}
