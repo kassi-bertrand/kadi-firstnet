@@ -7,7 +7,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 export default function Dashboard() {
   const handleAddAgent = async () => {
     try {
-      const res = await fetch("/api/kadi-proxy?action=addAgent");
+      const res = await fetch("/api/kadi-proxy?action=spawnAgent");
       if (!res.ok) throw new Error("Failed to add agent");
       const data = await res.json();
       console.log("Agent added:", data);

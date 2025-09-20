@@ -141,9 +141,8 @@ export async function GET(req: NextRequest) {
   const action = url.searchParams.get("action"); // e.g., "addAgent"
   const type = url.searchParams.get("type") as Agent["type"] | undefined; // optional
 
-  if (action === "addAgent" && client) {
+  if (action === "spawnAgent" && client) {
     const uniqueId = `agent-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
     await client.callTool('world-simulator', 'spawnAgent', {
       agentId: uniqueId,
       type: "civilian", // matches enum ["civilian", "firefighter", ...]

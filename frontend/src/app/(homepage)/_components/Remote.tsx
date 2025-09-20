@@ -18,7 +18,7 @@ export default function Remote() {
           </span>
         </ShimmerButton>
 
-        <ShimmerButton
+        {/* <ShimmerButton
           shimmerColor="#ffcc00"
           shimmerDuration="2s"
           background="rgba(0,0,0,1)"
@@ -28,7 +28,7 @@ export default function Remote() {
           <span className="text-center text-sm font-medium text-white lg:text-lg">
             Pause
           </span>
-        </ShimmerButton>
+        </ShimmerButton> */}
 
         <ShimmerButton
           shimmerColor="#ff4d4d"
