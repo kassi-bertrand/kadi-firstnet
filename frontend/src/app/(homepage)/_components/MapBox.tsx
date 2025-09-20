@@ -40,6 +40,7 @@ export default function MapBox({ agentsMap }: MapBoxProps) {
         addIcon("police-icon", "/images/police.png");    // police
         addIcon("firefighter-icon", "/images/firefighter.png");    
         addIcon("ems-icon", "/images/ems.png");          // EMS
+        addIcon("brain-icon", "/images/brain.png");          // EMS
       }}
     >
       <AgentLayer agentsMap={agentsMap} />

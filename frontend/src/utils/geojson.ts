@@ -23,6 +23,12 @@ export function agentsMapToGeoJSON(
       case "civilian":
         icon = "civilian-icon"; 
         break;
+      case "commander":
+        icon = "brain-icon";
+        break;
+      case "brain":
+        icon = "brain-icon";
+        break;
     }
 
     return {
