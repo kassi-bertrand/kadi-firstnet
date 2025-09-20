@@ -80,6 +80,7 @@ async function initKadiClient() {
 
   // Keep legacy listeners (optional)
   client.subscribeToEvent("civilian.*", (data: any) => {
+    // console.log("Civilian: ", data);
     if (data?.id && data?.longitude != null && data?.latitude != null) {
       const id = data.id as string;
       typesByAgentId.set(id, "civilian");
@@ -93,6 +94,7 @@ async function initKadiClient() {
     }
   });
   client.subscribeToEvent("fire.*", (data: any) => {
+    // console.log("Fire: ", data)
     if (data?.id && data?.longitude != null && data?.latitude != null) {
       const id = data.id as string;
       typesByAgentId.set(id, "fire");
@@ -105,6 +107,38 @@ async function initKadiClient() {
       });
     }
   });
+  client.subscribeToEvent("world.agent.despawned", (data: any) => {
+    console.log("Despawn: ", data)
+    const id = data?.agentId as string;
+    const pos = data?.position as { lat?: number; lon?: number } | undefined;
+    const type = data?.type as Agent["type"] | undefined;
+    if (!id) return;
+    if (type) typesByAgentId.set(id, type);
+    if (pos?.lat != null && pos?.lon != null) {
+      agentsMap.set(id, {
+        id,
+        type: typesByAgentId.get(id) ?? "civilian",
+        event: "die",
+        longitude: pos.lon,
+        latitude: pos.lat,
+      });
+    }
+  });
+  client.subscribeToEvent("fire.extinguished", (data: any) => {
+    console.log("Fire: ", data)
+    if (data?.id && data?.longitude != null && data?.latitude != null) {
+      const id = data.id as string;
+      typesByAgentId.set(id, "fire");
+      agentsMap.set(id, {
+        id,
+        type: "fire",
+        event: "die",
+        longitude: data.longitude,
+        latitude: data.latitude,
+      });
+    }
+  });
+
 }
 
 

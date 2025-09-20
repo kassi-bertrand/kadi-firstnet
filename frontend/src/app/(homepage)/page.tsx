@@ -10,8 +10,18 @@ import { Pause, UserPlus } from "lucide-react";
 import Remote from "./_components/Remote";
 
 export default function Home() {
-  const [agentsMap, setAgentsMap] = useState<Map<string, Agent>>(new Map());
-
+  const [agentsMap, setAgentsMap] = useState<Map<string, Agent>>(() => {
+    const map = new Map<string, Agent>();
+    // Add a test agent at some coordinates
+    // map.set("test-agent", {
+    //   id: "test-agent",
+    //   type: "ems",
+    //   latitude: 32.7749,  // Example: San Francisco
+    //   longitude: -96.8,
+    //   event: "test",
+    // });
+    return map;
+  });
   useEffect(() => {
     const fetchAgents = async () => {
       try {
@@ -22,12 +32,16 @@ export default function Home() {
         setAgentsMap(prev => {
           const next = new Map(prev);
           (data.agents as Agent[]).forEach((agent: Agent) => {
+            if (agent.event === "die") {
+              next.delete(agent.id);
+              return; // exits THIS iteration only
+            }
             // Ensure we always store latitude/longitude fields
             const id = agent.id;
             const latitude = (agent as any).latitude ?? (agent as any).lat;
             const longitude = (agent as any).longitude ?? (agent as any).lon;
             if (id == null || latitude == null || longitude == null) return;
-
+            agent.event == "die"
             const existing = next.get(id);
             if (!existing || existing.latitude !== latitude || existing.longitude !== longitude) {
               next.set(id, {
