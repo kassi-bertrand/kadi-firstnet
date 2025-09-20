@@ -25,7 +25,9 @@ import {
 } from './types.js';
 
 const log = debug('world-simulator');
-const brokerUrl = process.env.KADI_BROKER_URL || 'ws://localhost:8080';
+const TRACE_FIRE_ID = process.env.FIRE_TRACE_ID;
+// Prefer remote broker by default; allow override via env
+const brokerUrl = process.env.KADI_BROKER_URL || 'ws://kadi.build:8080';
 
 /**
  * World Simulator Agent - Central Authority for Emergency Simulation
@@ -37,6 +39,7 @@ const brokerUrl = process.env.KADI_BROKER_URL || 'ws://localhost:8080';
  */
 export class WorldSimulatorAgent {
   private client: KadiClient;
+  private instanceId: string = process.env.WORLD_INSTANCE_ID || uuidv4();
   private worldState = {
     agents: new Map<string, AgentState>(),
     hazards: new Map<string, HazardState>(),
@@ -65,16 +68,16 @@ export class WorldSimulatorAgent {
       name: 'world-simulator',
       role: 'agent',
       transport: 'broker',
-      brokers: { 
-        local: brokerUrl,
-        remote: "ws://kadi.build:8080"
+      brokers: {
+        local: 'ws://localhost:8080',
+        remote: brokerUrl
       },
       defaultBroker: 'remote',
       networks: ['global']
     });
 
     this.setupDefaultLocations();
-    log('World Simulator initialized');
+    log(`World Simulator initialized (instanceId=${this.instanceId}, broker remote=${brokerUrl}, default=remote)`);
 
     // Compute tick gating based on env-configurable rates
     this.batchEveryTicks = this.batchHz > 0 ? Math.max(1, Math.round(this.simHz / this.batchHz)) : 0;
@@ -837,37 +840,89 @@ export class WorldSimulatorAgent {
 
   private updateHazards(): void {
     const currentTime = Date.now();
+    const hazardsToDelete: Array<{ hazardId: string; position: Position }> = [];
 
     for (const [hazardId, hazard] of this.worldState.hazards) {
-      if (hazard.type === 'fire' && hazard.intensity > 0) {
+      if (hazard.type === 'fire') {
         const timeSinceUpdate = (currentTime - hazard.lastUpdated) / 1000;
 
-        // Fire grows unless suppressed
-        if (hazard.suppressionEffort < 0.5) {
-          hazard.intensity = Math.min(1.0, hazard.intensity + 0.01 * timeSinceUpdate);
-          hazard.radius = Math.min(100, hazard.radius + hazard.spreadRate * timeSinceUpdate);
-        } else {
-          hazard.intensity = Math.max(0, hazard.intensity - 0.02 * timeSinceUpdate * hazard.suppressionEffort);
+        // Only update growing/shrinking fires that still have intensity
+        if (hazard.intensity > 0) {
+          // Fire grows only when there is no suppression; any suppression causes decline
+          if (hazard.suppressionEffort > 0) {
+            // Stronger suppression reduces faster
+            hazard.intensity = Math.max(0, hazard.intensity - 0.02 * timeSinceUpdate * Math.max(0.1, hazard.suppressionEffort));
+          } else {
+            // No suppression applied → slow growth and spread
+            hazard.intensity = Math.min(1.0, hazard.intensity + 0.01 * timeSinceUpdate);
+            hazard.radius = Math.min(100, hazard.radius + hazard.spreadRate * timeSinceUpdate);
+          }
+
+          hazard.lastUpdated = currentTime;
         }
 
-        hazard.lastUpdated = currentTime;
+        // Check if fire should be removed (intensity dropped to 0 or below)
+        if (hazard.intensity <= 0) {
+          hazardsToDelete.push({ hazardId, position: hazard.position });
+          // Send final update with intensity 0 before removal
+          this.client.publishEvent('world.hazard.fire.updated', {
+            instanceId: this.instanceId,
+            hazardId,
+            position: hazard.position,
+            intensity: 0,
+            radius: 0,
+            suppressionEffort: hazard.suppressionEffort,
+            time: currentTime,
+            tick: this.tickCounter
+          });
+          if (TRACE_FIRE_ID && hazardId === TRACE_FIRE_ID) {
+            log(`TRACE fire ${hazardId}: published intensity=0 before removal (tick=${this.tickCounter})`);
+          }
+          continue;  // Don't send normal update for extinguished fires
+        }
 
         this.client.publishEvent('world.hazard.fire.updated', {
+          instanceId: this.instanceId,
           hazardId,
           position: hazard.position,
           intensity: hazard.intensity,
           radius: hazard.radius,
-          suppressionEffort: hazard.suppressionEffort
+          suppressionEffort: hazard.suppressionEffort,
+          time: currentTime,
+          tick: this.tickCounter
         });
+        if (TRACE_FIRE_ID && hazardId === TRACE_FIRE_ID) {
+          log(`TRACE fire ${hazardId}: published updated intensity=${hazard.intensity.toFixed(2)} (tick=${this.tickCounter})`);
+        }
 
         // Also publish as fire agent update for frontend visualization
         this.client.publishEvent('fire.updated', {
+          instanceId: this.instanceId,
           id: hazardId,
           type: 'fire',
           longitude: hazard.position.lon,
           latitude: hazard.position.lat,
-          event: 'fire.updated'
+          intensity: hazard.intensity,  // Include intensity!
+          event: 'fire.updated',
+          time: currentTime
         });
+      }
+    }
+
+    // Remove extinguished fires from world state
+    for (const item of hazardsToDelete) {
+      this.worldState.hazards.delete(item.hazardId);
+      log(`🔥💀 Removed extinguished fire ${item.hazardId} from world state`);
+      // Emit explicit removed event to help downstream consumers
+      this.client.publishEvent('world.hazard.fire.removed', {
+        instanceId: this.instanceId,
+        hazardId: item.hazardId,
+        position: item.position,
+        time: currentTime,
+        tick: this.tickCounter
+      });
+      if (TRACE_FIRE_ID && item.hazardId === TRACE_FIRE_ID) {
+        log(`TRACE fire ${item.hazardId}: removed from world state (tick=${this.tickCounter})`);
       }
     }
   }
@@ -1019,25 +1074,51 @@ export class WorldSimulatorAgent {
     if (fireExtinguished) {
       log(`🎉 Fire ${request.fireId} extinguished by agent ${request.agentId}!`);
 
-      // Remove fire from world state
-      this.worldState.hazards.delete(request.fireId);
+      // Set intensity to 0 but DON'T delete yet - let updateHazards handle it
+      fire.intensity = 0;
+      fire.suppressionEffort = 1;
+
+      // Emit world.hazard.fire.updated with intensity 0
+      const time = Date.now();
+      const tick = this.tickCounter;
+      await this.client.publishEvent('world.hazard.fire.updated', {
+        instanceId: this.instanceId,
+        hazardId: request.fireId,
+        position: fire.position,
+        intensity: 0,
+        radius: 0,
+        suppressionEffort: 1,
+        time,
+        tick
+      });
+      if (TRACE_FIRE_ID && request.fireId === TRACE_FIRE_ID) {
+        log(`TRACE fire ${request.fireId}: suppressFire emitted intensity=0 (tick=${tick})`);
+      }
 
       // Emit fire extinguished event
       await this.client.publishEvent('fire.extinguished', {
+        instanceId: this.instanceId,
         fireId: request.fireId,
         extinguishedBy: request.agentId,
         position: fire.position,
-        timestamp: Date.now()
+        timestamp: time,
+        time,
+        tick
       });
 
       // Also emit updated fire event for frontend (intensity 0)
       await this.client.publishEvent('fire.updated', {
+        instanceId: this.instanceId,
         id: request.fireId,
         longitude: fire.position.lon,
         latitude: fire.position.lat,
         intensity: 0,
-        event: 'fire.updated'
+        event: 'fire.updated',
+        time
       });
+      if (TRACE_FIRE_ID && request.fireId === TRACE_FIRE_ID) {
+        log(`TRACE fire ${request.fireId}: emitted fire.updated intensity=0`);
+      }
 
       return {
         success: true,
@@ -1047,12 +1128,17 @@ export class WorldSimulatorAgent {
     } else {
       // Fire still burning but weakened
       await this.client.publishEvent('fire.updated', {
+        instanceId: this.instanceId,
         id: request.fireId,
         longitude: fire.position.lon,
         latitude: fire.position.lat,
         intensity: newIntensity,
-        event: 'fire.updated'
+        event: 'fire.updated',
+        time: Date.now()
       });
+      if (TRACE_FIRE_ID && request.fireId === TRACE_FIRE_ID) {
+        log(`TRACE fire ${request.fireId}: suppressFire emitted fire.updated intensity=${newIntensity.toFixed(2)}`);
+      }
 
       return {
         success: true,
@@ -1092,21 +1178,27 @@ export class WorldSimulatorAgent {
 
       this.worldState.hazards.set(fireId, fire);
 
+      const spawnTime = Date.now();
       this.client.publishEvent('world.hazard.fire.spawned', {
+        instanceId: this.instanceId,
         hazardId: fireId,
         type: 'fire',
         position: fire.position,
         intensity: fire.intensity,
-        radius: fire.radius
+        radius: fire.radius,
+        time: spawnTime,
+        tick: this.tickCounter
       });
 
       // Also publish as fire agent for frontend visualization
       this.client.publishEvent('fire.spawned', {
+        instanceId: this.instanceId,
         id: fireId,
         type: 'fire',
         longitude: fire.position.lon,
         latitude: fire.position.lat,
-        event: 'fire.spawned'
+        event: 'fire.spawned',
+        time: spawnTime
       });
 
       log(`Created fire ${i + 1}/6 with ID ${fireId} at ${fire.position.lat.toFixed(4)}, ${fire.position.lon.toFixed(4)} (intensity: ${fire.intensity})`);

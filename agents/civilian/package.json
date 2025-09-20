@@ -1,0 +1,20 @@
+{
+  "name": "civilian-agent",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Civilian agents with personality-driven behavior for FirstNet emergency simulation",
+  "main": "civilian-agent.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/civilian-agent.js",
+    "start:archetypes": "node dist/civilian-agent.js 10 --archetypes",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@kadi.build/core": "0.0.1-alpha.9"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

@@ -9,6 +9,33 @@ const agentsMap: Map<string, Agent> = new Map();
 const typesByAgentId: Map<string, Agent["type"]> = new Map();
 const lastUpdateById: Map<string, number> = new Map();
 
+// Debug logging control for very chatty fire event logs
+const FIRE_DEBUG: boolean = (() => {
+  const val = (process.env.DEBUG_FIRE || "").toLowerCase();
+  return val === "1" || val === "true" || val === "yes";
+})();
+const fireLog = (...args: any[]) => { if (FIRE_DEBUG) console.log(...args); };
+// Optional removal threshold (default 0 to require exact zero); set to 0.05 to match simulator extinguish threshold
+const FIRE_REMOVE_THRESHOLD: number = (() => {
+  const raw = process.env.FIRE_REMOVE_THRESHOLD;
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) ? (n as number) : 0;
+})();
+
+// If set, only accept events from a specific simulator instance
+const ACCEPT_INSTANCE_ID: string | undefined = process.env.KADI_SIM_INSTANCE || process.env.SIM_INSTANCE_ID;
+const TRACE_FIRE_ID: string | undefined = process.env.FIRE_TRACE_ID;
+function traceLog(id: string | undefined, ...args: any[]) {
+  if (!TRACE_FIRE_ID) return;
+  if (id === TRACE_FIRE_ID) console.log('[TRACE]', ...args);
+}
+function shouldAcceptEvent(data: any): boolean {
+  if (!ACCEPT_INSTANCE_ID) return true;
+  const id = (data && (data.instanceId as string)) || undefined;
+  if (!id) return false;
+  return id === ACCEPT_INSTANCE_ID;
+}
+
 // Initialize Kadi client only once
 async function initKadiClient() {
   if (client) return;
@@ -107,46 +134,75 @@ async function initKadiClient() {
     console.log(`Agent despawned and removed from map: ${id}`);
   });
 
-  // 5) Handle fire extinguished events
+  // 5) Consolidated fire lifecycle management
+  // Track fires that have been explicitly removed to ignore any late/out-of-order re-adds
+  const deletedFireIds: Set<string> = new Set();
+
+  function removeFire(fireId: string, reason: string, time?: number) {
+    const t = typeof time === 'number' ? time : Date.now();
+    const prev = lastUpdateById.get(fireId) ?? 0;
+    if (t < prev) {
+      fireLog(`🔥⏪ FRONTEND: Ignoring stale removal for ${fireId} (prev=${prev}, t=${t}) from ${reason}`);
+      traceLog(fireId, `Ignoring stale removal (prev=${prev}, t=${t}) reason=${reason}`);
+      return;
+    }
+    lastUpdateById.set(fireId, t);
+    if (agentsMap.has(fireId)) {
+      agentsMap.delete(fireId);
+      typesByAgentId.delete(fireId);
+      console.log(`🔥🗑️ FRONTEND: Fire ${fireId} REMOVED from map: ${reason} (t=${t})`);
+      traceLog(fireId, `REMOVED from agentsMap (reason=${reason}, t=${t})`);
+    } else {
+      fireLog(`🔥❌ FRONTEND: Tried to remove fire ${fireId} but it wasn't in map: ${reason} (t=${t})`);
+      traceLog(fireId, `Remove called but not in agentsMap (reason=${reason}, t=${t})`);
+    }
+    // Mark as deleted so any late updates for this ID are ignored
+    deletedFireIds.add(fireId);
+    traceLog(fireId, `Marked as deleted`);
+  }
+
+  function updateFire(fireId: string, data: any, eventName: string, time?: number) {
+    // If this fire was already deleted due to intensity=0 or explicit removal,
+    // ignore any late updates to prevent icons from reappearing.
+    if (deletedFireIds.has(fireId)) {
+      fireLog(`🔥🚫 FRONTEND: Ignoring update for deleted fire ${fireId} via ${eventName}`);
+      traceLog(fireId, `REAPPEARANCE DETECTED; update after deletion via ${eventName}`);
+      return;
+    }
+    if (data?.longitude != null && data?.latitude != null) {
+      const t = typeof time === 'number' ? time : Date.now();
+      const prev = lastUpdateById.get(fireId) ?? 0;
+      if (t < prev) {
+        fireLog(`🔥⏪ FRONTEND: Ignoring stale update for ${fireId} via ${eventName} (prev=${prev}, t=${t})`);
+        traceLog(fireId, `Ignoring stale update via ${eventName} (prev=${prev}, t=${t})`);
+        return;
+      }
+      typesByAgentId.set(fireId, "fire");
+      lastUpdateById.set(fireId, t);
+      agentsMap.set(fireId, {
+        id: fireId,
+        type: "fire",
+        event: eventName,
+        longitude: data.longitude,
+        latitude: data.latitude,
+      });
+      fireLog(`🔥📍 FRONTEND: Fire ${fireId} updated at ${data.latitude}, ${data.longitude} via ${eventName} (t=${t})`);
+       traceLog(fireId, `UPDATED via ${eventName} at ${data.latitude}, ${data.longitude} t=${t}`);
+    }
+  }
+
   client.subscribeToEvent("fire.extinguished", (data: any) => {
-    const id = data?.fireId as string;
-    if (!id) return;
-
-    // Remove fire from map when extinguished
-    agentsMap.delete(id);
-    typesByAgentId.delete(id);
-    lastUpdateById.delete(id);
-
-    console.log(`Fire extinguished and removed from map: ${id}`);
-  });
-
-  // 6) Handle fire updates (including when intensity goes to 0)
-  client.subscribeToEvent("fire.updated", (data: any) => {
-    const id = data?.id as string;
-    const intensity = data?.intensity as number;
-
-    if (id && intensity !== undefined) {
-      // If intensity is 0, remove the fire
-      if (intensity <= 0) {
-        agentsMap.delete(id);
-        typesByAgentId.delete(id);
-        lastUpdateById.delete(id);
-        console.log(`Fire ${id} removed (intensity 0)`);
-      }
-      // Otherwise update its position
-      else if (data?.longitude != null && data?.latitude != null) {
-        typesByAgentId.set(id, "fire");
-        lastUpdateById.set(id, Date.now());
-        agentsMap.set(id, {
-          id,
-          type: "fire",
-          event: "fire.updated",
-          longitude: data.longitude,
-          latitude: data.latitude,
-        });
-      }
+    if (!shouldAcceptEvent(data)) return;
+    fireLog(`🔥💀 FRONTEND: Received fire.extinguished event:`, JSON.stringify(data));
+    const id = data?.fireId || data?.id;
+    if (id) {
+      const t = (data?.time as number | undefined) ?? (data?.timestamp as number | undefined) ?? Date.now();
+      removeFire(id, "fire.extinguished event", t);
+    } else {
+      fireLog(`🔥❌ FRONTEND: fire.extinguished event missing ID`, data);
     }
   });
+
 
   // Keep legacy listeners (optional)
   client.subscribeToEvent("civilian.*", (data: any) => {
@@ -163,103 +219,69 @@ async function initKadiClient() {
       });
     }
   });
-  // Handle fire.* events more carefully
-  client.subscribeToEvent("fire.*", (data: any) => {
-    const id = data?.id || data?.fireId;
-    if (!id) return;
 
-    // Handle different fire events
-    const event = data.event || "";
-
-    if (event === "fire.extinguished" || event.includes("extinguished")) {
-      // Remove fire when extinguished
-      agentsMap.delete(id);
-      typesByAgentId.delete(id);
-      lastUpdateById.delete(id);
-      console.log(`Fire ${id} extinguished and removed from map (via fire.* event)`);
-    } else if (event === "fire.spawned" || event.includes("spawned")) {
-      // Add new fire
-      if (data?.longitude != null && data?.latitude != null) {
-        typesByAgentId.set(id, "fire");
-        lastUpdateById.set(id, Date.now());
-        agentsMap.set(id, {
-          id,
-          type: "fire",
-          event: event,
-          longitude: data.longitude,
-          latitude: data.latitude,
-        });
-        console.log(`Fire ${id} spawned at ${data.latitude}, ${data.longitude}`);
-      }
-    } else if (event === "fire.updated" || event.includes("updated")) {
-      // Update fire position/intensity
-      const intensity = data?.intensity;
-      if (intensity !== undefined && intensity <= 0) {
-        // Remove if intensity is 0
-        agentsMap.delete(id);
-        typesByAgentId.delete(id);
-        lastUpdateById.delete(id);
-        console.log(`Fire ${id} removed (intensity 0)`);
-      } else if (data?.longitude != null && data?.latitude != null) {
-        // Update position
-        typesByAgentId.set(id, "fire");
-        lastUpdateById.set(id, Date.now());
-        agentsMap.set(id, {
-          id,
-          type: "fire",
-          event: event,
-          longitude: data.longitude,
-          latitude: data.latitude,
-        });
-      }
-    }
-  });
-
-  // 7) Handle world.hazard.fire.* events for fire lifecycle
+  // 7) Handle world.hazard.fire.* events using consolidated functions
   client.subscribeToEvent("world.hazard.fire.spawned", (data: any) => {
+    if (!shouldAcceptEvent(data)) return;
+    fireLog(`🔥🌍 FRONTEND: Received world.hazard.fire.spawned:`, JSON.stringify(data));
     const id = data?.hazardId as string;
     const pos = data?.position as { lat?: number; lon?: number } | undefined;
-    if (!id || !pos?.lat || !pos?.lon) return;
+    if (!id || !pos?.lat || !pos?.lon) {
+      fireLog(`🔥❌ FRONTEND: world.hazard.fire.spawned missing data`, data);
+      return;
+    }
 
-    typesByAgentId.set(id, "fire");
-    lastUpdateById.set(id, Date.now());
-    agentsMap.set(id, {
-      id,
-      type: "fire",
-      event: "world.hazard.fire.spawned",
-      longitude: pos.lon,
-      latitude: pos.lat,
-    });
-    console.log(`World hazard fire ${id} spawned at ${pos.lat}, ${pos.lon}`);
+    const t = (data?.time as number | undefined) ?? Date.now();
+    // If a new fire with same ID appears, allow updates again
+    deletedFireIds.delete(id);
+    traceLog(id, `SPAWNED at ${pos.lat}, ${pos.lon} t=${t}`);
+    updateFire(id, { longitude: pos.lon, latitude: pos.lat }, "world.hazard.fire.spawned", t);
   });
 
   client.subscribeToEvent("world.hazard.fire.updated", (data: any) => {
+    if (!shouldAcceptEvent(data)) return;
+    fireLog(`🔥🌍 FRONTEND: Received world.hazard.fire.updated:`, JSON.stringify(data));
     const id = data?.hazardId as string;
     const intensity = data?.intensity as number;
     const pos = data?.position as { lat?: number; lon?: number } | undefined;
+    const t = (data?.time as number | undefined) ?? Date.now();
 
-    if (!id) return;
+    if (!id) {
+      fireLog(`🔥❌ FRONTEND: world.hazard.fire.updated missing ID`, data);
+      return;
+    }
+    const prev = lastUpdateById.get(id) ?? 0;
+    if (t < prev) {
+      fireLog(`🔥⏪ FRONTEND: Ignoring stale world.hazard.fire.updated for ${id} (prev=${prev}, t=${t})`);
+      traceLog(id, `Ignoring stale world.hazard.fire.updated (prev=${prev}, t=${t})`);
+      return;
+    }
 
-    if (intensity !== undefined && intensity <= 0) {
-      // Remove if intensity is 0
-      agentsMap.delete(id);
-      typesByAgentId.delete(id);
-      lastUpdateById.delete(id);
-      console.log(`World hazard fire ${id} removed (intensity 0)`);
+    if (typeof intensity === 'number' && intensity <= FIRE_REMOVE_THRESHOLD) {
+      console.log(`🔥💀 FRONTEND: world.hazard.fire.updated removing ${id} due to intensity ${intensity}`);
+      traceLog(id, `UPDATED with intensity=${intensity} → removing`);
+      removeFire(id, `world.hazard.fire intensity ${intensity}`, t);
     } else if (pos?.lat && pos?.lon) {
-      // Update position
->>>>>>> Stashed changes
-      typesByAgentId.set(id, "fire");
-      lastUpdateById.set(id, Date.now());
-      agentsMap.set(id, {
-        id,
-        type: "fire",
-        event: "world.hazard.fire.updated",
-        longitude: pos.lon,
-        latitude: pos.lat,
-      });
+      fireLog(`🔥🔄 FRONTEND: world.hazard.fire.updated updating ${id} position, intensity: ${intensity}`);
+      traceLog(id, `UPDATED intensity=${intensity} at ${pos.lat}, ${pos.lon} t=${t}`);
+      updateFire(id, { longitude: pos.lon, latitude: pos.lat }, "world.hazard.fire.updated", t);
     }
   });
+
+  // 8) Explicit removal event handling (belt-and-suspenders)
+  client.subscribeToEvent("world.hazard.fire.removed", (data: any) => {
+    if (!shouldAcceptEvent(data)) return;
+    fireLog(`🔥🧹 FRONTEND: Received world.hazard.fire.removed:`, JSON.stringify(data));
+    const id = data?.hazardId as string | undefined;
+    if (!id) {
+      fireLog(`🔥❌ FRONTEND: world.hazard.fire.removed missing ID`, data);
+      return;
+    }
+    const t = (data?.time as number | undefined) ?? Date.now();
+    traceLog(id, `REMOVED event t=${t}`);
+    removeFire(id, 'world.hazard.fire.removed', t);
+  });
+
 
   // 4) Firefighter status updates (helps type hydration)
   client.subscribeToEvent("firefighter.status", (data: any) => {

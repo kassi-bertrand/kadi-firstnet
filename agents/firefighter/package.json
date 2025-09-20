@@ -1,0 +1,19 @@
+{
+  "name": "firefighter-agent",
+  "version": "0.0.1",
+  "description": "Firefighter Agent for Emergency Response",
+  "main": "dist/firefighter-agent.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/firefighter-agent.js",
+    "dev": "npm run build && npm start"
+  },
+  "dependencies": {
+    "@kadi.build/core": "^0.0.1-alpha.9"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

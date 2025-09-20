@@ -188,6 +188,18 @@ export const SuppressFireResponseSchema = z.object({
 export type SuppressFireRequest = z.infer<typeof SuppressFireRequestSchema>;
 export type SuppressFireResponse = z.infer<typeof SuppressFireResponseSchema>;
 
+// Debug/Inspection API
+export const GetHazardStateRequestSchema = z.object({
+  hazardId: z.string()
+});
+
+export const GetHazardStateResponseSchema = z.object({
+  exists: z.boolean(),
+  hazard: HazardStateSchema.optional(),
+  success: z.boolean(),
+  error: z.string().optional()
+});
+
 // =========================================================================
 // EVENT SCHEMAS
 // =========================================================================
@@ -284,3 +296,5 @@ export type AgentMovementCompletedEvent = z.infer<typeof AgentMovementCompletedE
 export type HazardSpawnedEvent = z.infer<typeof HazardSpawnedEventSchema>;
 export type HazardUpdatedEvent = z.infer<typeof HazardUpdatedEventSchema>;
 export type AgentSpawnedEvent = z.infer<typeof AgentSpawnedEventSchema>;
+export type GetHazardStateRequest = z.infer<typeof GetHazardStateRequestSchema>;
+export type GetHazardStateResponse = z.infer<typeof GetHazardStateResponseSchema>;

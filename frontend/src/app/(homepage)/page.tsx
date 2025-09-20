@@ -29,29 +29,22 @@ export default function Home() {
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
         const data = await res.json();
-        setAgentsMap(prev => {
-          const next = new Map(prev);
+        // Full reconciliation with server: rebuild the map from response
+        setAgentsMap(() => {
+          const next = new Map<string, Agent>();
           (data.agents as Agent[]).forEach((agent: Agent) => {
-            if (agent.event === "die") {
-              next.delete(agent.id);
-              return; // exits THIS iteration only
-            }
-            // Ensure we always store latitude/longitude fields
-            const id = agent.id;
+            // Normalize id/lat/lon fields
+            const id = (agent as any).id as string | undefined;
             const latitude = (agent as any).latitude ?? (agent as any).lat;
             const longitude = (agent as any).longitude ?? (agent as any).lon;
             if (id == null || latitude == null || longitude == null) return;
-            agent.event == "die"
-            const existing = next.get(id);
-            if (!existing || existing.latitude !== latitude || existing.longitude !== longitude) {
-              next.set(id, {
-                ...existing,
-                ...agent,
-                id,
-                latitude,
-                longitude,
-              } as Agent);
-            }
+            // Ignore any 'die' marker; backend already prunes removed agents
+            next.set(id, {
+              ...agent,
+              id,
+              latitude,
+              longitude,
+            } as Agent);
           });
           return next;
         });
