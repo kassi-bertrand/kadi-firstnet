@@ -3,10 +3,6 @@ import { useEffect, useState } from "react";
 import { Agent } from "@/types/agent";
 import MapBox from "./_components/MapBox";
 import Dashboard from "./_components/Dashboard";
-import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
-import { cn } from "@/lib/utils";
-import { ShimmerButton } from "@/components/ui/shimmer-button";
-import { Pause, UserPlus } from "lucide-react";
 import Remote from "./_components/Remote";
 
 export default function Home() {
@@ -19,15 +15,22 @@ export default function Home() {
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
         const data = await res.json();
+        type AgentWithCoords = Agent & {
+          lat?: number;
+          lon?: number;
+          latitude?: number;
+          longitude?: number;
+        };
+        
         setAgentsMap(prev => {
           const next = new Map(prev);
-          (data.agents as Agent[]).forEach((agent: Agent) => {
-            // Ensure we always store latitude/longitude fields
+          (data.agents as AgentWithCoords[]).forEach((agent) => {
             const id = agent.id;
-            const latitude = (agent as any).latitude ?? (agent as any).lat;
-            const longitude = (agent as any).longitude ?? (agent as any).lon;
+            const latitude = agent.latitude ?? agent.lat;
+            const longitude = agent.longitude ?? agent.lon;
+        
             if (id == null || latitude == null || longitude == null) return;
-
+        
             const existing = next.get(id);
             if (!existing || existing.latitude !== latitude || existing.longitude !== longitude) {
               next.set(id, {
@@ -36,7 +39,7 @@ export default function Home() {
                 id,
                 latitude,
                 longitude,
-              } as Agent);
+              });
             }
           });
           return next;

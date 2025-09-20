@@ -8,6 +8,34 @@ let client: KadiClient | null = null;
 const agentsMap: Map<string, Agent> = new Map();
 const typesByAgentId: Map<string, Agent["type"]> = new Map();
 
+interface SpawnedAgentEvent {
+  agentId: string;
+  type?: Agent["type"];
+  position?: { lat?: number; lon?: number };
+}
+
+interface PositionsBatchEvent {
+  agents: Array<{ agentId: string; lat: number; lon: number }>;
+}
+
+interface UpdatedAgentEvent {
+  agentId?: string;
+  id?: string;
+  lat?: number;
+  lon?: number;
+  latitude?: number;
+  longitude?: number;
+  event?: string;
+}
+
+interface LegacyAgentEvent {
+  id: string;
+  latitude: number;
+  longitude: number;
+  event?: string;
+}
+
+
 // Initialize Kadi client only once
 async function initKadiClient() {
   if (client) return;
@@ -27,12 +55,10 @@ async function initKadiClient() {
   await client.connectToBrokers();
   console.log(`KADI client connected to broker at ${brokerUrl}`);
 
-  // Subscribe to world simulator streams
-  // 1) Track types from spawn events
-  client.subscribeToEvent("world.agent.spawned", (data: any) => {
-    const id = data?.agentId as string | undefined;
-    const type = data?.type as Agent["type"] | undefined;
-    const pos = data?.position as { lat?: number; lon?: number } | undefined;
+  client.subscribeToEvent("world.agent.spawned", (data: SpawnedAgentEvent) => {
+    const id = data.agentId;
+    const type = data.type;
+    const pos = data.position;
     if (!id) return;
     if (type) typesByAgentId.set(id, type);
     if (pos?.lat != null && pos?.lon != null) {
@@ -45,13 +71,12 @@ async function initKadiClient() {
       });
     }
   });
-  // 2) Batched positions for dashboards
-  client.subscribeToEvent("world.positions.batch", (batch: any) => {
-    if (!batch?.agents) return;
-    for (const a of batch.agents as Array<any>) {
-      const id = a?.agentId as string | undefined;
-      const lat = a?.lat as number | undefined;
-      const lon = a?.lon as number | undefined;
+  
+  client.subscribeToEvent("world.positions.batch", (batch: PositionsBatchEvent) => {
+    for (const a of batch.agents) {
+      const id = a.agentId;
+      const lat = a.lat;
+      const lon = a.lon;
       if (!id || lat == null || lon == null) continue;
       agentsMap.set(id, {
         id,
@@ -62,12 +87,11 @@ async function initKadiClient() {
       });
     }
   });
-
-  // 3) Per-agent real-time updates (moving)
-  client.subscribeToEvent("agent.position.updated", (data: any) => {
-    const id = (data?.agentId as string) || (data?.id as string);
-    const lat = (data?.lat as number) ?? (data?.latitude as number);
-    const lon = (data?.lon as number) ?? (data?.longitude as number);
+  
+  client.subscribeToEvent("agent.position.updated", (data: UpdatedAgentEvent) => {
+    const id = data.agentId ?? data.id;
+    const lat = data.lat ?? data.latitude;
+    const lon = data.lon ?? data.longitude;
     if (!id || lat == null || lon == null) return;
     agentsMap.set(id, {
       id,
@@ -77,35 +101,31 @@ async function initKadiClient() {
       latitude: lat,
     });
   });
-
-  // Keep legacy listeners (optional)
-  client.subscribeToEvent("civilian.*", (data: any) => {
-    if (data?.id && data?.longitude != null && data?.latitude != null) {
-      const id = data.id as string;
-      typesByAgentId.set(id, "civilian");
-      agentsMap.set(id, {
-        id,
-        type: "civilian",
-        event: data.event ?? "civilian.*",
-        longitude: data.longitude,
-        latitude: data.latitude,
-      });
-    }
+  
+  client.subscribeToEvent("civilian.*", (data: LegacyAgentEvent) => {
+    const { id, longitude, latitude, event } = data;
+    typesByAgentId.set(id, "civilian");
+    agentsMap.set(id, {
+      id,
+      type: "civilian",
+      event: event ?? "civilian.*",
+      longitude,
+      latitude,
+    });
   });
-  client.subscribeToEvent("fire.*", (data: any) => {
-    if (data?.id && data?.longitude != null && data?.latitude != null) {
-      const id = data.id as string;
-      typesByAgentId.set(id, "fire");
-      agentsMap.set(id, {
-        id,
-        type: "fire",
-        event: data.event ?? "fire.*",
-        longitude: data.longitude,
-        latitude: data.latitude,
-      });
-    }
+  
+  client.subscribeToEvent("fire.*", (data: LegacyAgentEvent) => {
+    const { id, longitude, latitude, event } = data;
+    typesByAgentId.set(id, "fire");
+    agentsMap.set(id, {
+      id,
+      type: "fire",
+      event: event ?? "fire.*",
+      longitude,
+      latitude,
+    });
   });
-}
+}  
 
 
 export async function GET(req: NextRequest) {
