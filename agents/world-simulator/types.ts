@@ -170,6 +170,24 @@ export const GetAgentPositionResponseSchema = z.object({
   error: z.string().optional()
 });
 
+// Suppress Fire API
+export const SuppressFireRequestSchema = z.object({
+  agentId: z.string(),
+  fireId: z.string(),
+  suppressionRate: z.number().min(0).max(1).default(0.2) // rate per tick (0.2 = 20% per tick)
+});
+
+export const SuppressFireResponseSchema = z.object({
+  success: z.boolean(),
+  fireExtinguished: z.boolean().default(false),
+  remainingIntensity: z.number().optional(),
+  error: z.string().optional()
+});
+
+// Type definitions
+export type SuppressFireRequest = z.infer<typeof SuppressFireRequestSchema>;
+export type SuppressFireResponse = z.infer<typeof SuppressFireResponseSchema>;
+
 // =========================================================================
 // EVENT SCHEMAS
 // =========================================================================

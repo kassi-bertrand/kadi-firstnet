@@ -14,10 +14,13 @@ import {
   type MoveMeResponse,
   type SpawnAgentRequest,
   type SpawnAgentResponse,
+  type SuppressFireRequest,
+  type SuppressFireResponse,
   WhatDoISeeRequestSchema,
   MoveMeRequestSchema,
   SpawnAgentRequestSchema,
   GetAgentPositionRequestSchema,
+  SuppressFireRequestSchema,
   AgentStateSchema
 } from './types.js';
 
@@ -212,6 +215,47 @@ export class WorldSimulatorAgent {
       throw new Error(`Broker rejected getAgentPosition registration: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
+    // Register suppressFire tool
+    try {
+      this.client.registerTool('suppressFire', async (params: unknown) => {
+      try {
+        const request = SuppressFireRequestSchema.parse(params);
+        log(`🚿 Received suppressFire request from agent: ${request.agentId} targeting fire: ${request.fireId}`);
+        return await this.handleSuppressFire(request);
+      } catch (error) {
+        return {
+          success: false,
+          fireExtinguished: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        };
+      }
+      });
+      log('✅ Registered tool: suppressFire');
+    } catch (error) {
+      log('❌ Failed to register suppressFire:', error);
+      throw new Error(`Broker rejected suppressFire registration: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    // Register despawnAgent tool
+    try {
+      this.client.registerTool('despawnAgent', async (params: unknown) => {
+        try {
+          const { agentId } = params as { agentId: string };
+          log(`🛫 Received despawnAgent request for agent: ${agentId}`);
+          return await this.handleDespawnAgent(agentId);
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          };
+        }
+      });
+      log('✅ Registered tool: despawnAgent');
+    } catch (error) {
+      log('❌ Failed to register despawnAgent:', error);
+      throw new Error(`Broker rejected despawnAgent registration: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
     log('✅ All KADI tools registered successfully');
   }
 
@@ -280,6 +324,14 @@ export class WorldSimulatorAgent {
           });
         }
       }
+    }
+
+    // Log fire IDs for debugging
+    const fireIds = response.hazards
+      .filter(h => h.type === 'fire')
+      .map(h => h.id);
+    if (fireIds.length > 0) {
+      log(`${request.agentId} sees fires with IDs: ${fireIds.join(', ')}`);
     }
 
     log(`${request.agentId} sees: ${response.agents.length} agents, ${response.hazards.length} hazards, ${response.exits.length} exits`);
@@ -386,6 +438,31 @@ export class WorldSimulatorAgent {
 
     const lifetimeInfo = request.lifetime ? ` (lifetime: ${request.lifetime / 1000}s)` : '';
     log(`Spawned ${request.agentId} at ${request.position.lat}, ${request.position.lon}${lifetimeInfo}`);
+    return { success: true };
+  }
+
+  private async handleDespawnAgent(agentId: string): Promise<{ success: boolean; error?: string }> {
+    const agent = this.worldState.agents.get(agentId);
+    if (!agent) {
+      return {
+        success: false,
+        error: 'Agent not found'
+      };
+    }
+
+    // Remove agent from world state
+    this.worldState.agents.delete(agentId);
+    this.worldState.activeMovements.delete(agentId);
+
+    // Emit despawn event
+    await this.client.publishEvent('world.agent.despawned', {
+      agentId,
+      type: agent.type,
+      position: agent.position,
+      timestamp: Date.now()
+    });
+
+    log(`🛫 Despawned agent: ${agentId}`);
     return { success: true };
   }
 
@@ -637,7 +714,10 @@ export class WorldSimulatorAgent {
           lat: agent.position.lat,
           lon: agent.position.lon,
           moving: false,
-          status: agent.status
+          status: agent.status,
+          type: agent.type,
+          time: currentTime,
+          tick: this.tickCounter
         });
 
         log(`${agentId} reached destination via ${movement.waypoints.length} waypoints`);
@@ -699,6 +779,9 @@ export class WorldSimulatorAgent {
           lon: position.lon,
           moving: true,
           status: agent.status,
+          type: agent.type,
+          time: currentTime,
+          tick: this.tickCounter,
           ...(heading !== undefined ? { heading } : {})
         });
       }
@@ -769,13 +852,22 @@ export class WorldSimulatorAgent {
 
         hazard.lastUpdated = currentTime;
 
-        // this.client.publishEvent('world.hazard.fire.updated', {
-        //   hazardId,
-        //   position: hazard.position,
-        //   intensity: hazard.intensity,
-        //   radius: hazard.radius,
-        //   suppressionEffort: hazard.suppressionEffort
-        // });
+        this.client.publishEvent('world.hazard.fire.updated', {
+          hazardId,
+          position: hazard.position,
+          intensity: hazard.intensity,
+          radius: hazard.radius,
+          suppressionEffort: hazard.suppressionEffort
+        });
+
+        // Also publish as fire agent update for frontend visualization
+        this.client.publishEvent('fire.updated', {
+          id: hazardId,
+          type: 'fire',
+          longitude: hazard.position.lon,
+          latitude: hazard.position.lat,
+          event: 'fire.updated'
+        });
       }
     }
   }
@@ -832,7 +924,10 @@ export class WorldSimulatorAgent {
             lat: agent.position.lat,
             lon: agent.position.lon,
             moving: false,
-            status: agent.status
+            status: agent.status,
+            type: agent.type,
+            time: currentTime,
+            tick: this.tickCounter
           });
         }
       }
@@ -845,7 +940,8 @@ export class WorldSimulatorAgent {
         lat: a.position.lat,
         lon: a.position.lon,
         moving: a.moving,
-        status: a.status
+        status: a.status,
+        type: a.type
       }));
       
       this.client.publishEvent('world.positions.batch', {
@@ -856,39 +952,170 @@ export class WorldSimulatorAgent {
     }
 
     // Publish world tick
-    // await this.client.publishEvent('world.tick', {
-    //   time: currentTime,
-    //   tick: this.tickCounter,
-    //   dt: 0.1
-    // });
+    await this.client.publishEvent('world.tick', {
+      time: currentTime,
+      tick: this.tickCounter,
+      dt: 0.1
+    });
+  }
+
+  private async handleSuppressFire(request: SuppressFireRequest): Promise<SuppressFireResponse> {
+    log(`🚿 Agent ${request.agentId} attempting to suppress fire ${request.fireId}`);
+
+    // Log all current fire IDs for debugging
+    const currentFireIds = Array.from(this.worldState.hazards.keys()).filter(id => {
+      const h = this.worldState.hazards.get(id);
+      return h && h.type === 'fire';
+    });
+    log(`Current fire IDs in world: ${currentFireIds.join(', ') || 'none'}`);
+
+    // Check if fire exists
+    const fire = this.worldState.hazards.get(request.fireId);
+    if (!fire || fire.type !== 'fire') {
+      log(`❌ Fire ${request.fireId} not found. Available fires: ${currentFireIds.join(', ')}`);
+      return {
+        success: false,
+        fireExtinguished: false,
+        error: 'Fire not found'
+      };
+    }
+
+    // Check if agent exists and is close enough to the fire
+    const agent = this.worldState.agents.get(request.agentId);
+    if (!agent) {
+      return {
+        success: false,
+        fireExtinguished: false,
+        error: 'Agent not found'
+      };
+    }
+
+    // Calculate distance between agent and fire
+    const distance = this.calculateDistance(agent.position, fire.position);
+    const maxSuppressionRange = 25; // meters - firefighters need to be close
+
+    if (distance > maxSuppressionRange) {
+      return {
+        success: false,
+        fireExtinguished: false,
+        error: `Too far from fire (${distance.toFixed(1)}m > ${maxSuppressionRange}m)`
+      };
+    }
+
+    // Apply suppression to the fire
+    const suppressionRate = request.suppressionRate || 0.2;
+    const newIntensity = Math.max(0, fire.intensity - suppressionRate);
+
+    log(`🚿 Suppressing fire ${request.fireId}: ${fire.intensity.toFixed(2)} → ${newIntensity.toFixed(2)} (rate: ${suppressionRate})`);
+
+    // Update fire state
+    fire.intensity = newIntensity;
+    fire.suppressionEffort = Math.min(1, fire.suppressionEffort + suppressionRate);
+    fire.lastUpdated = Date.now();
+
+    // Check if fire is extinguished
+    const fireExtinguished = newIntensity <= 0.05; // Consider extinguished at 5% intensity
+
+    if (fireExtinguished) {
+      log(`🎉 Fire ${request.fireId} extinguished by agent ${request.agentId}!`);
+
+      // Remove fire from world state
+      this.worldState.hazards.delete(request.fireId);
+
+      // Emit fire extinguished event
+      await this.client.publishEvent('fire.extinguished', {
+        fireId: request.fireId,
+        extinguishedBy: request.agentId,
+        position: fire.position,
+        timestamp: Date.now()
+      });
+
+      // Also emit updated fire event for frontend (intensity 0)
+      await this.client.publishEvent('fire.updated', {
+        id: request.fireId,
+        longitude: fire.position.lon,
+        latitude: fire.position.lat,
+        intensity: 0,
+        event: 'fire.updated'
+      });
+
+      return {
+        success: true,
+        fireExtinguished: true,
+        remainingIntensity: 0
+      };
+    } else {
+      // Fire still burning but weakened
+      await this.client.publishEvent('fire.updated', {
+        id: request.fireId,
+        longitude: fire.position.lon,
+        latitude: fire.position.lat,
+        intensity: newIntensity,
+        event: 'fire.updated'
+      });
+
+      return {
+        success: true,
+        fireExtinguished: false,
+        remainingIntensity: newIntensity
+      };
+    }
   }
 
   public async createSampleFire(): Promise<void> {
-    const fireId = uuidv4();
-    const fire: HazardState = {
-      hazardId: fireId,
-      type: 'fire',
-      position: { lat: 32.7825, lon: -96.7849 }, // Deep Ellum
-      intensity: 0.6,
-      radius: 25,
-      fireIntensity: 'developing',
-      spreadRate: 0.5,
-      suppressionEffort: 0,
-      createdAt: Date.now(),
-      lastUpdated: Date.now()
-    };
+    // Create multiple fires in Deep Ellum area to simulate spreading fire
+    const fireLocations = [
+      { lat: 32.7825, lon: -96.7849, intensity: 0.7, radius: 30 }, // Original Deep Ellum fire (larger)
+      { lat: 32.7820, lon: -96.7845, intensity: 0.5, radius: 20 }, // Southeast spread
+      { lat: 32.7830, lon: -96.7853, intensity: 0.4, radius: 15 }, // Northwest spread
+      { lat: 32.7822, lon: -96.7855, intensity: 0.6, radius: 25 }, // West spread
+      { lat: 32.7828, lon: -96.7840, intensity: 0.3, radius: 18 }, // East spread
+      { lat: 32.7815, lon: -96.7850, intensity: 0.4, radius: 22 }, // South spread
+    ];
 
-    this.worldState.hazards.set(fireId, fire);
+    for (let i = 0; i < fireLocations.length; i++) {
+      const fireId = uuidv4();
+      const fireLocation = fireLocations[i];
 
-    this.client.publishEvent('world.hazard.fire.spawned', {
-      hazardId: fireId,
-      type: 'fire',
-      position: fire.position,
-      intensity: fire.intensity,
-      radius: fire.radius
-    });
+      const fire: HazardState = {
+        hazardId: fireId,
+        type: 'fire',
+        position: { lat: fireLocation.lat, lon: fireLocation.lon },
+        intensity: fireLocation.intensity,
+        radius: fireLocation.radius,
+        fireIntensity: fireLocation.intensity > 0.6 ? 'fully_developed' : 'developing',
+        spreadRate: 0.3 + (fireLocation.intensity * 0.4), // Higher intensity fires spread faster
+        suppressionEffort: 0,
+        createdAt: Date.now(),
+        lastUpdated: Date.now()
+      };
 
-    log(`Created sample fire in Deep Ellum`);
+      this.worldState.hazards.set(fireId, fire);
+
+      this.client.publishEvent('world.hazard.fire.spawned', {
+        hazardId: fireId,
+        type: 'fire',
+        position: fire.position,
+        intensity: fire.intensity,
+        radius: fire.radius
+      });
+
+      // Also publish as fire agent for frontend visualization
+      this.client.publishEvent('fire.spawned', {
+        id: fireId,
+        type: 'fire',
+        longitude: fire.position.lon,
+        latitude: fire.position.lat,
+        event: 'fire.spawned'
+      });
+
+      log(`Created fire ${i + 1}/6 with ID ${fireId} at ${fire.position.lat.toFixed(4)}, ${fire.position.lon.toFixed(4)} (intensity: ${fire.intensity})`);
+
+      // Small delay between fire spawns to simulate realistic spread
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    log(`🔥 Created 6 fires in Deep Ellum area - major emergency scenario!`);
   }
 
   public async start(): Promise<void> {

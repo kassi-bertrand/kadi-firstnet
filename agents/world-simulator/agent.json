@@ -185,6 +185,48 @@
         },
         "required": ["success"]
       }
+    },
+    {
+      "name": "suppressFire",
+      "description": "Apply suppression to a fire hazard",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" },
+          "fireId": { "type": "string" },
+          "suppressionRate": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "required": ["agentId", "fireId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "fireExtinguished": { "type": "boolean" },
+          "remainingIntensity": { "type": "number" },
+          "error": { "type": "string" }
+        },
+        "required": ["success", "fireExtinguished"]
+      }
+    },
+    {
+      "name": "despawnAgent",
+      "description": "Remove an agent from the world simulation",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" }
+        },
+        "required": ["agentId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
     }
   ],
   "scripts": {
