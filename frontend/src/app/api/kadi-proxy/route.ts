@@ -331,17 +331,37 @@ export async function GET(req: NextRequest) {
   if (action === "addAgent" && client) {
     // Generate a random agent ID
     const agentId = `agent_${Math.floor(Math.random() * 100000)}`;
-  
-    // Randomize location around Highland Park within ~0.01 degrees (~1 km)
-    const lat = 32.7767 + (Math.random() - 0.5) * 0.02;
-    const lon = -96.7970 + (Math.random() - 0.5) * 0.02;
-  
+
+    // Randomize spawn location anywhere in Dallas metro (~0.15 degree range = ~15km)
+    const spawnLat = 32.7767 + (Math.random() - 0.5) * 0.3;
+    const spawnLon = -96.7970 + (Math.random() - 0.5) * 0.3;
+
+    // Random destination elsewhere in Dallas (different from spawn)
+    const destLat = 32.7767 + (Math.random() - 0.5) * 0.3;
+    const destLon = -96.7970 + (Math.random() - 0.5) * 0.3;
+
+    // Calculate appropriate lifetime based on distance
+    const distance = Math.sqrt(
+      Math.pow((destLat - spawnLat) * 111000, 2) +
+      Math.pow((destLon - spawnLon) * 111000, 2)
+    ); // rough meters
+    const lifetime = Math.max(60000, distance * 10); // at least 60 seconds
+
     await client.callTool('world-simulator', 'spawnAgent', {
       agentId,
       type: "civilian",
-      position: { lat, lon },
+      position: { lat: spawnLat, lon: spawnLon },
       status: "transporting",
-      lifetime: 2000000
+      lifetime
+    });
+
+    // Start movement immediately after spawn
+    const speed = distance / (lifetime / 1000); // m/s to arrive on time
+    await client.callTool('world-simulator', 'moveMe', {
+      agentId,
+      destination: { lat: destLat, lon: destLon },
+      profile: 'driving',
+      speed: Math.min(speed, 15) // cap at reasonable speed
     });
   }
   
