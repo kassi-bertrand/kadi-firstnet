@@ -16,6 +16,17 @@ export default function Dashboard() {
     }
   };
 
+  const handleSpawnFire = async () => {
+    try {
+      const res = await fetch("/api/kadi-proxy?action=spawnFire");
+      if (!res.ok) throw new Error("Failed to add agent");
+      const data = await res.json();
+      console.log("Agent added:", data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   return (
     <Dock className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-black px-4 py-2 gap-4 border-0">
       {/* Add Agent */}
@@ -53,6 +64,7 @@ export default function Dashboard() {
           shimmerDuration="3s"
           background="rgba(0,0,0,1)"
           className="p-3 rounded-full"
+          onClick={handleSpawnFire}
         >
           <Flame className="text-white" />
         </ShimmerButton>

@@ -316,16 +316,24 @@ export async function GET(req: NextRequest) {
   const type = url.searchParams.get("type") as Agent["type"] | undefined; // optional
 
   if (action === "addAgent" && client) {
+    // Generate a random agent ID
+    const agentId = `agent_${Math.floor(Math.random() * 100000)}`;
+  
+    // Randomize location around Highland Park within ~0.01 degrees (~1 km)
+    const lat = 32.7767 + (Math.random() - 0.5) * 0.02;
+    const lon = -96.7970 + (Math.random() - 0.5) * 0.02;
+  
     await client.callTool('world-simulator', 'spawnAgent', {
-      agentId: "test20",
-      type: "civilian", // matches enum ["civilian", "firefighter", ...]
-      position: {       // must be "position", not "properties"
-        lat: 32.7767,
-        lon: -96.7970
-      },
-      status: "transporting", // matches enum ["available", "en_route", ...]
-      lifetime: 2000000           // milliseconds (or adjust as needed)
+      agentId,
+      type: "civilian",
+      position: { lat, lon },
+      status: "transporting",
+      lifetime: 2000000
     });
+  }
+  
+  else if (action === "spawnFire" && client) {
+    // TODO: client.callTool(spawnFire)
   }
   
 

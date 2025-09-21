@@ -19,18 +19,6 @@ export default function Remote() {
         </ShimmerButton>
 
         <ShimmerButton
-          shimmerColor="#ffcc00"
-          shimmerDuration="2s"
-          background="rgba(0,0,0,1)"
-          className="flex items-center gap-2 px-6 py-4 rounded-xl shadow-2xl"
-        >
-          <Pause className="w-6 h-6 text-white" />
-          <span className="text-center text-sm font-medium text-white lg:text-lg">
-            Pause
-          </span>
-        </ShimmerButton>
-
-        <ShimmerButton
           shimmerColor="#ff4d4d"
           shimmerDuration="3s"
           background="rgba(0,0,0,1)"

@@ -17,8 +17,18 @@ export default function AgentLayer({ agentsMap }: AgentLayerProps) {
         id="agents-symbol"
         type="symbol"
         layout={{
-          "icon-image": ["get", "icon"], // 👈 dynamic per agent
-          "icon-size": 0.075,
+          "icon-image": ["get", "icon"], // each feature has `icon` property
+          "icon-size": [
+            "match",
+            ["get", "icon"],
+            "civilian-icon", 0.05,   // civilians smaller
+            "police-icon", 0.1,     // police car
+            "fire-icon", 0.1,        // fire truck
+            "firefighter-icon", 0.075, // person but slightly larger
+            "ems-icon", 0.1,         // ambulance
+            "brain-icon", 0.1,      // misc
+            0.05                   // default size
+          ],
           "icon-allow-overlap": true,
         }}
       />
