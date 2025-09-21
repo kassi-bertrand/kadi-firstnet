@@ -134,6 +134,19 @@ async function initKadiClient() {
     console.log(`Agent despawned and removed from map: ${id}`);
   });
 
+  // Handle agent lifetime expiration
+  client.subscribeToEvent("world.agent.expired", (data: any) => {
+    const id = data?.agentId as string;
+    if (!id) return;
+
+    // Remove expired agent from maps
+    agentsMap.delete(id);
+    typesByAgentId.delete(id);
+    lastUpdateById.delete(id);
+
+    console.log(`🛑 Agent ${id} expired after ${data?.lifetime / 1000 || '?'}s and removed from map`);
+  });
+
   // 5) Consolidated fire lifecycle management
   // Track fires that have been explicitly removed to ignore any late/out-of-order re-adds
   const deletedFireIds: Set<string> = new Set();
@@ -333,7 +346,23 @@ export async function GET(req: NextRequest) {
   }
   
   else if (action === "spawnFire" && client) {
-    // TODO: client.callTool(spawnFire)
+    // Example: Spawn a fire hazard using the new spawnHazard tool
+    // Generate a unique hazard ID
+    const hazardId = `fire_${Math.floor(Math.random() * 100000)}`;
+
+    // Random position around Deep Ellum area
+    const lat = 32.7825 + (Math.random() - 0.5) * 0.01;
+    const lon = -96.7849 + (Math.random() - 0.5) * 0.01;
+
+    await client.callTool('world-simulator', 'spawnHazard', {
+      hazardId,
+      type: "fire",
+      position: { lat, lon },
+      intensity: 0.3 + Math.random() * 0.5, // Random intensity 0.3-0.8
+      radius: 15 + Math.random() * 25,      // Random radius 15-40m
+      fireIntensity: "developing",
+      spreadRate: 0.2 + Math.random() * 0.3 // Random spread rate
+    });
   }
   
 

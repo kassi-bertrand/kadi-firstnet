@@ -200,6 +200,22 @@ export const GetHazardStateResponseSchema = z.object({
   error: z.string().optional()
 });
 
+// Spawn Hazard API
+export const SpawnHazardRequestSchema = z.object({
+  hazardId: z.string(),
+  type: HazardTypeSchema,
+  position: PositionSchema,
+  intensity: z.number().min(0).max(1),
+  radius: z.number().min(1).max(1000),
+  fireIntensity: FireIntensitySchema.optional(),
+  spreadRate: z.number().min(0).optional()
+});
+
+export const SpawnHazardResponseSchema = z.object({
+  success: z.boolean(),
+  error: z.string().optional()
+});
+
 // =========================================================================
 // EVENT SCHEMAS
 // =========================================================================
@@ -298,3 +314,5 @@ export type HazardUpdatedEvent = z.infer<typeof HazardUpdatedEventSchema>;
 export type AgentSpawnedEvent = z.infer<typeof AgentSpawnedEventSchema>;
 export type GetHazardStateRequest = z.infer<typeof GetHazardStateRequestSchema>;
 export type GetHazardStateResponse = z.infer<typeof GetHazardStateResponseSchema>;
+export type SpawnHazardRequest = z.infer<typeof SpawnHazardRequestSchema>;
+export type SpawnHazardResponse = z.infer<typeof SpawnHazardResponseSchema>;

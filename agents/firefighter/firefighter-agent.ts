@@ -20,6 +20,15 @@ interface FirefighterState {
   status: FirefighterStatus;
   baseStation: { lat: number; lon: number };
   currentIncident?: string;
+  // The currently accepted dispatch id (if any). This implements a simple
+  // handshake so a firefighter accepts only one broadcast dispatch at a time.
+  currentDispatchId?: string;
+  // Keep a stable target hazard once chosen to prevent oscillating between
+  // multiple nearby fires. We stick to this target until extinguished or lost.
+  currentTargetFireId?: string;
+  // Last known position of the current target; used when target is temporarily
+  // out of vision range to continue moving toward it.
+  currentTargetPosition?: { lat: number; lon: number };
   currentDestination?: { lat: number; lon: number };
   lastStatusUpdate: number;
 }
@@ -133,12 +142,49 @@ export class FirefighterAgent {
 
     // Listen for dispatch orders from commander
     await this.client.subscribeToEvent('firefighter.dispatch', async (event: any) => {
-      // Respond to any dispatch if we're available (first come, first served)
-      if (this.state.status === 'at_base') {
-        console.log(`🚨 ${this.agentId}: Responding to dispatch for incident ${event.incidentId}`);
-        await this.handleDispatch(event);
+      // Expected payload shape is defined in agents/shared/events.ts (FirefighterDispatchEvent)
+      const dispatchId = event?.dispatchId as string | undefined;
+      const incidentId = event?.incidentId as string | undefined;
+      const destination = event?.destination as { lat: number; lon: number } | undefined;
+      const urgency = (event?.urgency as 'normal' | 'urgent' | 'emergency') || 'emergency';
+
+      if (!dispatchId || !incidentId || !destination) return; // Guard malformed broadcast
+
+      // Accept only if truly available and not already engaged in another dispatch.
+      if (this.state.status === 'at_base' && !this.state.currentDispatchId) {
+        console.log(`🚨 ${this.agentId}: Accepting dispatch ${dispatchId} for incident ${incidentId}`);
+        // 1) Publish an ACK so the commander knows we took it.
+        await this.client.publishEvent('firefighter.dispatch.ack', {
+          dispatchId,
+          firefighterId: this.agentId,
+          accepted: true
+        });
+
+        // 2) Proceed to handle the dispatch (move to destination)
+        await this.handleDispatch({ incidentId, destination, urgency, dispatchId });
       } else {
-        console.log(`⚠️ ${this.agentId}: Received dispatch but currently ${this.state.status} - cannot respond`);
+        // Decline politely; allows commander to try others or re-dispatch on timeout
+        await this.client.publishEvent('firefighter.dispatch.ack', {
+          dispatchId,
+          firefighterId: this.agentId,
+          accepted: false,
+          reason: `busy_${this.state.status}`
+        });
+        console.log(`⚠️ ${this.agentId}: Declined dispatch ${dispatchId} while ${this.state.status}`);
+      }
+    });
+
+    // Listen for explicit cancellations (e.g., another unit accepted or incident resolved)
+    await this.client.subscribeToEvent('firefighter.dispatch.cancel', async (event: any) => {
+      const dispatchId = event?.dispatchId as string | undefined;
+      if (!dispatchId || dispatchId !== this.state.currentDispatchId) return;
+
+      console.log(`🛑 ${this.agentId}: Dispatch ${dispatchId} cancelled (reason=${event?.reason || 'unspecified'})`);
+      // If not actively suppressing, abort and return to base immediately.
+      if (this.state.status !== 'extinguishing') {
+        await this.returnToBase();
+        this.state.currentDispatchId = undefined;
+        this.state.currentIncident = undefined;
       }
     });
 
@@ -159,6 +205,8 @@ export class FirefighterAgent {
     // Update state for dispatch
     this.state.status = 'en_route';
     this.state.currentIncident = event.incidentId;
+    // Bind the dispatch id so we ignore other dispatches while en route
+    if (event.dispatchId) this.state.currentDispatchId = event.dispatchId;
     this.state.currentDestination = event.destination;
     this.state.lastStatusUpdate = Date.now();
 
@@ -233,18 +281,37 @@ export class FirefighterAgent {
         const fires = vision.hazards.filter((h: any) => h.type === 'fire');
 
         if (fires.length > 0) {
-          const nearestFire = fires.reduce((nearest: any, fire: any) =>
-            fire.distance < nearest.distance ? fire : nearest
-          );
+          // Add randomness to fire selection to prevent all firefighters targeting the same fire
+          const nearestFire = Math.random() < 0.7
+            ? fires.reduce((nearest: any, fire: any) => fire.distance < nearest.distance ? fire : nearest)
+            : fires[Math.floor(Math.random() * fires.length)];
 
           console.log(`🔥 Firefighter ${this.agentId}: FIRE DETECTED at station! Distance: ${nearestFire.distance.toFixed(1)}m`);
           console.log(`🚨 Firefighter ${this.agentId}: Self-dispatching to nearby fire!`);
 
           // Self-dispatch to the fire
           this.state.status = 'en_route';
+          // Create a synthetic incident id for bookkeeping and visibility in UIs
           this.state.currentIncident = `self_dispatch_${Date.now()}`;
           this.state.currentDestination = nearestFire.position;
           this.state.lastStatusUpdate = now;
+          // Lock target to prevent thrashing between multiple hazards
+          this.state.currentTargetFireId = nearestFire.id;
+          this.state.currentTargetPosition = nearestFire.position;
+
+          // Inform any commander(s) that we're self-assigning this hazard so
+          // they can avoid duplicative dispatches to the same fire.
+          try {
+            await this.client.publishEvent('firefighter.self_dispatch', {
+              firefighterId: this.agentId,
+              hazardId: nearestFire.id,
+              incidentId: this.state.currentIncident,
+              position: nearestFire.position,
+              timestamp: Date.now()
+            });
+          } catch (e) {
+            console.warn(`⚠️ ${this.agentId}: Failed to publish self_dispatch (non-fatal):`, e);
+          }
 
           // Move to the fire immediately
           await this.client.callTool('world-simulator', 'moveMe', {
@@ -293,20 +360,34 @@ export class FirefighterAgent {
         const fires = vision.hazards.filter((h: any) => h.type === 'fire');
 
         if (fires.length > 0) {
-          const nearestFire = fires.reduce((nearest: any, fire: any) =>
-            fire.distance < nearest.distance ? fire : nearest
-          );
+          // Prefer our locked target if visible; otherwise choose nearest and lock it
+          const locked = this.state.currentTargetFireId
+            ? fires.find((f: any) => f.id === this.state.currentTargetFireId)
+            : undefined;
+          // Add randomness when selecting new targets (not locked targets)
+          const target = locked || (Math.random() < 0.7
+            ? fires.reduce((nearest: any, fire: any) => fire.distance < nearest.distance ? fire : nearest)
+            : fires[Math.floor(Math.random() * fires.length)]);
 
-          if (nearestFire.distance <= 20) { // Close enough to start suppression
-            console.log(`🚿 Firefighter ${this.agentId}: Starting fire suppression on fire ${nearestFire.id}`);
+          // Persist target info
+          this.state.currentTargetFireId = target.id;
+          this.state.currentTargetPosition = target.position;
+
+          // Use a larger threshold to avoid getting stuck due to pathfinding constraints
+          const closeThreshold = 45; // meters - increased from 25 to handle movement precision issues
+          if (target.distance <= closeThreshold) {
+            console.log(`🚿 Firefighter ${this.agentId}: Starting fire suppression on fire ${target.id}`);
             this.state.status = 'extinguishing';
             this.state.lastStatusUpdate = Date.now();
             await this.notifyStatusChange('extinguishing');
           } else {
-            // Move closer to the fire
+            // Move closer to our locked target and mark en_route so arrival detection runs
+            this.state.status = 'en_route';
+            this.state.lastStatusUpdate = Date.now();
+            await this.notifyStatusChange('en_route');
             await this.client.callTool('world-simulator', 'moveMe', {
               agentId: this.agentId,
-              destination: nearestFire.position,
+              destination: target.position,
               urgency: 'urgent'
             });
           }
@@ -329,10 +410,14 @@ export class FirefighterAgent {
       }) as any;
 
       if (vision.success) {
-        const fires = vision.hazards.filter((h: any) => h.type === 'fire' && h.distance <= 25);
+        // Try to find our locked target first; if present but slightly beyond 25m, we'll move toward it below.
+        const lockedId = this.state.currentTargetFireId;
+        const visibleFires = vision.hazards.filter((h: any) => h.type === 'fire');
+        const targetFire = lockedId
+          ? visibleFires.find((h: any) => h.id === lockedId)
+          : visibleFires.sort((a: any, b: any) => a.distance - b.distance)[0];
 
-        if (fires.length > 0) {
-          const targetFire = fires[0];
+        if (targetFire && targetFire.distance <= 45) {
           console.log(`🚿 Firefighter ${this.agentId}: Suppressing fire ${targetFire.id} (intensity: ${targetFire.intensity.toFixed(2)})`);
 
           // Call suppressFire tool on world simulator
@@ -362,6 +447,10 @@ export class FirefighterAgent {
             }
             // If too far, try to move closer
             else if (suppressionResult.error?.includes('Too far')) {
+              // Switch to en_route to allow arrival handling
+              this.state.status = 'en_route';
+              this.state.lastStatusUpdate = Date.now();
+              await this.notifyStatusChange('en_route');
               await this.client.callTool('world-simulator', 'moveMe', {
                 agentId: this.agentId,
                 destination: targetFire.position,
@@ -370,8 +459,21 @@ export class FirefighterAgent {
             }
           }
         } else {
-          console.log(`✅ Firefighter ${this.agentId}: No more fires detected in suppression range`);
-          await this.returnToBase();
+          // Target not within suppression distance. If we have a locked target,
+          // keep moving toward the last known position; otherwise, return to base.
+          if (this.state.currentTargetPosition) {
+            this.state.status = 'en_route';
+            this.state.lastStatusUpdate = Date.now();
+            await this.notifyStatusChange('en_route');
+            await this.client.callTool('world-simulator', 'moveMe', {
+              agentId: this.agentId,
+              destination: this.state.currentTargetPosition,
+              urgency: 'urgent'
+            });
+          } else {
+            console.log(`✅ Firefighter ${this.agentId}: No more fires detected in suppression range`);
+            await this.returnToBase();
+          }
         }
       }
     } catch (error) {
@@ -411,6 +513,9 @@ export class FirefighterAgent {
         // Reset state
         this.state.status = 'at_base';
         this.state.currentIncident = undefined;
+        this.state.currentDispatchId = undefined;
+        this.state.currentTargetFireId = undefined;
+        this.state.currentTargetPosition = undefined;
         this.state.currentDestination = undefined;
         this.state.lastStatusUpdate = Date.now();
 

@@ -29,6 +29,9 @@ export function agentsMapToGeoJSON(
       case "brain":
         icon = "brain-icon";
         break;
+      default:
+        icon = "civilian-icon";
+        break;
     }
 
     return {

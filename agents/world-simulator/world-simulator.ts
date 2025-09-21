@@ -16,11 +16,14 @@ import {
   type SpawnAgentResponse,
   type SuppressFireRequest,
   type SuppressFireResponse,
+  type SpawnHazardRequest,
+  type SpawnHazardResponse,
   WhatDoISeeRequestSchema,
   MoveMeRequestSchema,
   SpawnAgentRequestSchema,
   GetAgentPositionRequestSchema,
   SuppressFireRequestSchema,
+  SpawnHazardRequestSchema,
   AgentStateSchema
 } from './types.js';
 
@@ -257,6 +260,26 @@ export class WorldSimulatorAgent {
     } catch (error) {
       log('❌ Failed to register despawnAgent:', error);
       throw new Error(`Broker rejected despawnAgent registration: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    // Register spawnHazard tool
+    try {
+      this.client.registerTool('spawnHazard', async (params: unknown) => {
+        try {
+          const request = SpawnHazardRequestSchema.parse(params);
+          log(`🔥 Received spawnHazard request: ${request.type} hazard ${request.hazardId} at ${request.position.lat}, ${request.position.lon}`);
+          return await this.handleSpawnHazard(request);
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          };
+        }
+      });
+      log('✅ Registered tool: spawnHazard');
+    } catch (error) {
+      log('❌ Failed to register spawnHazard:', error);
+      throw new Error(`Broker rejected spawnHazard registration: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 
     log('✅ All KADI tools registered successfully');
@@ -1047,7 +1070,7 @@ export class WorldSimulatorAgent {
 
     // Calculate distance between agent and fire
     const distance = this.calculateDistance(agent.position, fire.position);
-    const maxSuppressionRange = 25; // meters - firefighters need to be close
+    const maxSuppressionRange = 45; // meters - increased to handle pathfinding constraints
 
     if (distance > maxSuppressionRange) {
       return {
@@ -1146,6 +1169,78 @@ export class WorldSimulatorAgent {
         remainingIntensity: newIntensity
       };
     }
+  }
+
+  private async handleSpawnHazard(request: SpawnHazardRequest): Promise<SpawnHazardResponse> {
+    log(`🔥 Creating ${request.type} hazard: ${request.hazardId}`);
+
+    // Check if hazard already exists
+    if (this.worldState.hazards.has(request.hazardId)) {
+      return {
+        success: false,
+        error: `Hazard ${request.hazardId} already exists`
+      };
+    }
+
+    const currentTime = Date.now();
+
+    // Create hazard state
+    const hazard: HazardState = {
+      hazardId: request.hazardId,
+      type: request.type,
+      position: request.position,
+      intensity: request.intensity,
+      radius: request.radius,
+      fireIntensity: request.fireIntensity || (request.type === 'fire' ? 'developing' : undefined),
+      spreadRate: request.spreadRate || (request.type === 'fire' ? 0.3 : 0),
+      suppressionEffort: 0,
+      createdAt: currentTime,
+      lastUpdated: currentTime
+    };
+
+    // Add to world state
+    this.worldState.hazards.set(request.hazardId, hazard);
+
+    // Emit appropriate spawn events based on hazard type
+    if (request.type === 'fire') {
+      // Fire-specific events
+      await this.client.publishEvent('world.hazard.fire.spawned', {
+        instanceId: this.instanceId,
+        hazardId: request.hazardId,
+        type: 'fire',
+        position: hazard.position,
+        intensity: hazard.intensity,
+        radius: hazard.radius,
+        time: currentTime,
+        tick: this.tickCounter
+      });
+
+      // Also publish as fire agent for frontend visualization
+      await this.client.publishEvent('fire.spawned', {
+        instanceId: this.instanceId,
+        id: request.hazardId,
+        type: 'fire',
+        longitude: hazard.position.lon,
+        latitude: hazard.position.lat,
+        event: 'fire.spawned',
+        time: currentTime
+      });
+    } else {
+      // Generic hazard spawn event for non-fire hazards
+      await this.client.publishEvent('world.hazard.spawned', {
+        instanceId: this.instanceId,
+        hazardId: request.hazardId,
+        type: request.type,
+        position: hazard.position,
+        intensity: hazard.intensity,
+        radius: hazard.radius,
+        time: currentTime,
+        tick: this.tickCounter
+      });
+    }
+
+    log(`✅ Spawned ${request.type} hazard ${request.hazardId} at ${request.position.lat}, ${request.position.lon} (intensity: ${request.intensity}, radius: ${request.radius}m)`);
+    return { success: true };
   }
 
   public async createSampleFire(): Promise<void> {
