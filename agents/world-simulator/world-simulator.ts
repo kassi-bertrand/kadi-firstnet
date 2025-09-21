@@ -35,7 +35,7 @@ const brokerUrl = process.env.KADI_BROKER_URL || 'ws://kadi.build:8080';
 // Waypoint simplification: minimum distance between waypoints in meters
 // Lower = more detailed path, Higher = smoother but less accurate
 // Try values: 5m (detailed), 10m (balanced), 20m (smooth), 50m (very sparse)
-const MIN_WAYPOINT_DISTANCE = Number(process.env.MIN_WAYPOINT_DISTANCE) || 50 // meters - adjust this to control sparsity!
+const MIN_WAYPOINT_DISTANCE = Number(process.env.MIN_WAYPOINT_DISTANCE) || 10 // meters - better road following!
 
 /**
  * World Simulator Agent - Central Authority for Emergency Simulation
@@ -126,6 +126,52 @@ export class WorldSimulatorAgent {
 
     locations.forEach(loc => this.worldState.locations.set(loc.id, loc));
     log(`Initialized ${locations.length} Dallas locations`);
+  }
+
+  private async spawnInitialFires(): Promise<void> {
+    log('🔥 Spawning initial fires around SMU area...');
+
+    // Fire locations around SMU campus and Dallas area
+    const fireLocations = [
+      // SMU Campus area fires
+      { lat: 32.8430, lon: -96.7860, description: 'SMU Library area' },
+      { lat: 32.8400, lon: -96.7830, description: 'SMU Student Center' },
+      { lat: 32.8445, lon: -96.7820, description: 'SMU Engineering building' },
+      { lat: 32.8385, lon: -96.7870, description: 'SMU Residential area' },
+      { lat: 32.8415, lon: -96.7890, description: 'SMU Athletic facilities' },
+
+      // Nearby areas (within firefighter detection range)
+      { lat: 32.8380, lon: -96.7800, description: 'University Park' },
+      { lat: 32.8460, lon: -96.7880, description: 'Highland Park border' },
+      { lat: 32.8350, lon: -96.7820, description: 'Mockingbird Lane area' },
+      { lat: 32.8480, lon: -96.7840, description: 'Preston Center vicinity' },
+      { lat: 32.8320, lon: -96.7890, description: 'Love Field approach' }
+    ];
+
+    // Spawn 10 fires (as requested by user)
+    for (let i = 0; i < fireLocations.length; i++) {
+      const fireLocation = fireLocations[i];
+      const fireId = `initial_fire_${i + 1}`;
+
+      try {
+        await this.client.callTool('world-simulator', 'spawnHazard', {
+          hazardId: fireId,
+          type: 'fire',
+          position: fireLocation,
+          intensity: Math.random() * 0.5 + 0.3, // Random intensity 0.3-0.8
+          radius: 25 + Math.random() * 25 // Random radius 25-50m
+        });
+
+        log(`🔥 Spawned fire ${fireId} at ${fireLocation.description} (${fireLocation.lat.toFixed(4)}, ${fireLocation.lon.toFixed(4)})`);
+      } catch (error) {
+        log(`❌ Failed to spawn fire ${fireId}: ${error}`);
+      }
+
+      // Small delay between spawns to avoid overwhelming the system
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    log(`✅ Spawned ${fireLocations.length} initial fires for firefighter detection`);
   }
 
   private async registerTools(): Promise<void> {
@@ -1330,45 +1376,6 @@ export class WorldSimulatorAgent {
     return { success: true };
   }
 
-  public async spawnFirefightersAtStations(): Promise<void> {
-    // List of some Dallas fire stations (lat/lon)
-    const fireStations = [
-      { name: 'Station 1 - SMU North', lat: 32.8440, lon: -96.7830 },
-      { name: 'Station 2 - SMU East', lat: 32.8425, lon: -96.7805 },
-      { name: 'Station 5 - SMU South', lat: 32.8385, lon: -96.7855 },
-      { name: 'Station 11 - SMU West', lat: 32.8400, lon: -96.7880 },
-      { name: 'Station 18 - SMU Center', lat: 32.8410, lon: -96.7840 }
-    ];
-    
-  
-    for (const station of fireStations) {
-      for (let i = 0; i < 2; i++) { // spawn 2 firefighters per station
-        const agentId = `ff_${station.name.replace(/\s+/g, '_')}_${i + 1}_${Date.now()}`;
-  
-        try {
-          const result = await this.client.callTool('world-simulator', 'spawnAgent', {
-            agentId,
-            type: 'firefighter',
-            position: { lat: station.lat, lon: station.lon },
-            status: 'available'
-          }) as any;
-  
-          if (result.success) {
-            console.log(`🚒 Spawned firefighter ${agentId} at ${station.name} (${station.lat.toFixed(4)}, ${station.lon.toFixed(4)})`);
-          } else {
-            console.warn(`⚠️ Failed to spawn firefighter ${agentId}: ${result.error}`);
-          }
-  
-          // Small delay to prevent race conditions
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } catch (err) {
-          console.error(`❌ Error spawning firefighter ${agentId}:`, err);
-        }
-      }
-    }
-  
-    console.log(`✅ All firefighters spawned at Dallas fire stations (2 per station)`);
-  }
   
   
 
@@ -1384,8 +1391,7 @@ export class WorldSimulatorAgent {
 
       log('🌍 World Simulator connected and ready to receive requests!');
 
-      // Create sample fire
-      setTimeout(() => this.spawnFirefightersAtStations(), 2000);
+      // Note: Use launch-firefighters.js script to spawn intelligent firefighters
 
       const result = await this.client.callTool('world-simulator', 'spawnAgent', {
         agentId: 'commander1',
@@ -1393,6 +1399,10 @@ export class WorldSimulatorAgent {
         position: { lat: 32.7767, lon: -96.797 },
         status: 'available'
       });
+
+      // Spawn initial fires around SMU area for firefighters to detect
+      await this.spawnInitialFires();
+
       // Start 10 FPS simulation
       this.isRunning = true;
       const tickInterval = setInterval(async () => {
