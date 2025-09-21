@@ -1330,68 +1330,47 @@ export class WorldSimulatorAgent {
     return { success: true };
   }
 
-  public async createSampleFire(): Promise<void> {
-    // Create multiple fires in Deep Ellum area to simulate spreading fire
-    const fireLocations = [
-      { lat: 32.7825, lon: -96.7849, intensity: 0.7, radius: 30 }, // Original Deep Ellum fire (larger)
-      { lat: 32.7820, lon: -96.7845, intensity: 0.5, radius: 20 }, // Southeast spread
-      { lat: 32.7830, lon: -96.7853, intensity: 0.4, radius: 15 }, // Northwest spread
-      { lat: 32.7822, lon: -96.7855, intensity: 0.6, radius: 25 }, // West spread
-      { lat: 32.7828, lon: -96.7840, intensity: 0.3, radius: 18 }, // East spread
-      { lat: 32.7815, lon: -96.7850, intensity: 0.4, radius: 22 }, // South spread
+  public async spawnFirefightersAtStations(): Promise<void> {
+    // List of some Dallas fire stations (lat/lon)
+    const fireStations = [
+      { name: 'Station 1 - SMU North', lat: 32.8440, lon: -96.7830 },
+      { name: 'Station 2 - SMU East', lat: 32.8425, lon: -96.7805 },
+      { name: 'Station 5 - SMU South', lat: 32.8385, lon: -96.7855 },
+      { name: 'Station 11 - SMU West', lat: 32.8400, lon: -96.7880 },
+      { name: 'Station 18 - SMU Center', lat: 32.8410, lon: -96.7840 }
     ];
-
-    for (let i = 0; i < fireLocations.length; i++) {
-      const fireId = uuidv4();
-      const fireLocation = fireLocations[i];
-
-      const fire: HazardState = {
-        hazardId: fireId,
-        type: 'fire',
-        position: { lat: fireLocation.lat, lon: fireLocation.lon },
-        intensity: fireLocation.intensity,
-        radius: fireLocation.radius,
-        fireIntensity: fireLocation.intensity > 0.6 ? 'fully_developed' : 'developing',
-        spreadRate: 0.3 + (fireLocation.intensity * 0.4), // Higher intensity fires spread faster
-        suppressionEffort: 0,
-        createdAt: Date.now(),
-        lastUpdated: Date.now()
-      };
-
-      this.worldState.hazards.set(fireId, fire);
-
-      const spawnTime = Date.now();
-      // Don't await to prevent blocking the tick loop
-      this.client.publishEvent('world.hazard.fire.spawned', {
-        instanceId: this.instanceId,
-        hazardId: fireId,
-        type: 'fire',
-        position: fire.position,
-        intensity: fire.intensity,
-        radius: fire.radius,
-        time: spawnTime,
-        tick: this.tickCounter
-      });
-
-      // Also publish as fire agent for frontend visualization
-      this.client.publishEvent('fire.spawned', {
-        instanceId: this.instanceId,
-        id: fireId,
-        type: 'fire',
-        longitude: fire.position.lon,
-        latitude: fire.position.lat,
-        event: 'fire.spawned',
-        time: spawnTime
-      });
-
-      log(`Created fire ${i + 1}/6 with ID ${fireId} at ${fire.position.lat.toFixed(4)}, ${fire.position.lon.toFixed(4)} (intensity: ${fire.intensity})`);
-
-      // Small delay between fire spawns to simulate realistic spread
-      await new Promise(resolve => setTimeout(resolve, 200));
+    
+  
+    for (const station of fireStations) {
+      for (let i = 0; i < 2; i++) { // spawn 2 firefighters per station
+        const agentId = `ff_${station.name.replace(/\s+/g, '_')}_${i + 1}_${Date.now()}`;
+  
+        try {
+          const result = await this.client.callTool('world-simulator', 'spawnAgent', {
+            agentId,
+            type: 'firefighter',
+            position: { lat: station.lat, lon: station.lon },
+            status: 'available'
+          }) as any;
+  
+          if (result.success) {
+            console.log(`🚒 Spawned firefighter ${agentId} at ${station.name} (${station.lat.toFixed(4)}, ${station.lon.toFixed(4)})`);
+          } else {
+            console.warn(`⚠️ Failed to spawn firefighter ${agentId}: ${result.error}`);
+          }
+  
+          // Small delay to prevent race conditions
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (err) {
+          console.error(`❌ Error spawning firefighter ${agentId}:`, err);
+        }
+      }
     }
-
-    log(`🔥 Created 6 fires in Deep Ellum area - major emergency scenario!`);
+  
+    console.log(`✅ All firefighters spawned at Dallas fire stations (2 per station)`);
   }
+  
+  
 
   public async start(): Promise<void> {
     try {
@@ -1406,8 +1385,14 @@ export class WorldSimulatorAgent {
       log('🌍 World Simulator connected and ready to receive requests!');
 
       // Create sample fire
-      setTimeout(() => this.createSampleFire(), 2000);
+      setTimeout(() => this.spawnFirefightersAtStations(), 2000);
 
+      const result = await this.client.callTool('world-simulator', 'spawnAgent', {
+        agentId: 'commander1',
+        type: 'commander',
+        position: { lat: 32.7767, lon: -96.797 },
+        status: 'available'
+      });
       // Start 10 FPS simulation
       this.isRunning = true;
       const tickInterval = setInterval(async () => {

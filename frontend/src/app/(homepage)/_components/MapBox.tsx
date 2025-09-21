@@ -10,9 +10,11 @@ const MAP_BOX_TOKEN = process.env.NEXT_PUBLIC_MAP_BOX_TOKEN;
 interface MapBoxProps {
   agentsMap: Map<string, Agent>;
 }
-const US_BOUNDS: [[number, number], [number, number]] = [
-  [-125.0011, 24.9493], // Southwest corner
-  [-66.9326, 49.5904],  // Northeast corner
+
+// North Texas bounding box (restrict panning)
+const NORTH_TEXAS_BOUNDS: [[number, number], [number, number]] = [
+  [-98.5, 31.0],  // SW corner
+  [-94.0, 34.5],  // NE corner
 ];
 
 export default function MapBox({ agentsMap }: MapBoxProps) {
@@ -20,18 +22,18 @@ export default function MapBox({ agentsMap }: MapBoxProps) {
     <Map
       mapboxAccessToken={MAP_BOX_TOKEN}
       initialViewState={{
-        longitude: -96.797,
-        latitude: 32.7767,
-        zoom: 12,
-        pitch: 60,   // more tilt for 3D effect
-        bearing: -20, // rotate slightly
+        longitude: -96.7847,  // Center on SMU
+        latitude: 32.8419,    // Center on SMU
+        zoom: 14,             // Closer zoom for campus
+        pitch: 30,
+        bearing: 0,
       }}
       style={{ width: "100vw", height: "100vh" }}
-      maxBounds={US_BOUNDS} // 🔹 Restrict to US
+      maxBounds={NORTH_TEXAS_BOUNDS}  // Keep map within North Texas
       mapStyle="mapbox://styles/mapbox/dark-v11"
       onLoad={(e) => {
         const map = e.target;
-        // --- Add icons ---
+
         const addIcon = (name: string, url: string) => {
           if (!map.hasImage(name)) {
             map.loadImage(url, (error, image) => {

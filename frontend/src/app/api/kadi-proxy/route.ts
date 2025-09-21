@@ -321,32 +321,32 @@ async function initKadiClient() {
   });
 }
 
-
 export async function GET(req: NextRequest) {
   await initKadiClient();
 
-  // Parse query params
   const url = new URL(req.url);
   const action = url.searchParams.get("action"); // e.g., "addAgent"
 
   if (action === "addAgent" && client) {
-    // Generate a random agent ID
     const agentId = `agent_${Math.floor(Math.random() * 100000)}`;
 
-    // Randomize spawn location anywhere in Dallas metro (~0.15 degree range = ~15km)
-    const spawnLat = 32.7767 + (Math.random() - 0.5) * 0.3;
-    const spawnLon = -96.7970 + (Math.random() - 0.5) * 0.3;
+    // Spawn around SMU (~1 km radius)
+    const centerLat = 32.8419;
+    const centerLon = -96.7847;
+    const range = 0.009; // ~1 km in degrees
 
-    // Random destination elsewhere in Dallas (different from spawn)
-    const destLat = 32.7767 + (Math.random() - 0.5) * 0.3;
-    const destLon = -96.7970 + (Math.random() - 0.5) * 0.3;
+    const spawnLat = centerLat + (Math.random() - 0.5) * range;
+    const spawnLon = centerLon + (Math.random() - 0.5) * range;
 
-    // Calculate appropriate lifetime based on distance
+    const destLat = centerLat + (Math.random() - 0.5) * range;
+    const destLon = centerLon + (Math.random() - 0.5) * range;
+
     const distance = Math.sqrt(
       Math.pow((destLat - spawnLat) * 111000, 2) +
       Math.pow((destLon - spawnLon) * 111000, 2)
     ); // rough meters
-    const lifetime = Math.max(60000, distance * 10); // at least 60 seconds
+
+    const lifetime = Math.max(60000, distance * 10); // at least 60s
 
     await client.callTool('world-simulator', 'spawnAgent', {
       agentId,
@@ -356,23 +356,22 @@ export async function GET(req: NextRequest) {
       lifetime
     });
 
-    // Start movement immediately after spawn
-    const speed = distance / (lifetime / 1000); // m/s to arrive on time
+    // Move agent immediately
+    const speed = distance / (lifetime / 1000); // m/s
     await client.callTool('world-simulator', 'moveMe', {
       agentId,
       destination: { lat: destLat, lon: destLon },
       profile: 'driving',
-      speed: Math.min(speed, 15) // cap at reasonable speed
+      speed: Math.min(speed, 15) // cap speed
     });
   }
-  
+
   else if (action === "spawnFire" && client) {
-    // Example: Spawn a fire hazard using the new spawnHazard tool
-    // Generate a unique hazard ID
     const hazardId = `fire_${Math.floor(Math.random() * 100000)}`;
 
-    const lat = 32.7767 + (Math.random() - 0.5) * 0.02;
-    const lon = -96.7970 + (Math.random() - 0.5) * 0.02;
+    // Spawn fire near SMU (~0.2 km radius)
+    const lat = 32.8419 + (Math.random() - 0.5) * 0.002;
+    const lon = -96.7847 + (Math.random() - 0.5) * 0.002;
 
     console.log("Create fire");
 
@@ -380,13 +379,12 @@ export async function GET(req: NextRequest) {
       hazardId,
       type: "fire",
       position: { lat, lon },
-      intensity: 0.3 + Math.random() * 0.5, // Random intensity 0.3-0.8
-      radius: 15 + Math.random() * 25,      // Random radius 15-40m
+      intensity: 0.3 + Math.random() * 0.5,
+      radius: 15 + Math.random() * 25,
       fireIntensity: "developing",
-      spreadRate: 0.2 + Math.random() * 0.3 // Random spread rate
+      spreadRate: 0.2 + Math.random() * 0.3
     });
   }
-  
 
   return NextResponse.json({
     agents: Array.from(agentsMap.values()),
