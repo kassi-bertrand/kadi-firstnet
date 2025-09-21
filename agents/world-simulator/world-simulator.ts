@@ -32,6 +32,11 @@ const TRACE_FIRE_ID = process.env.FIRE_TRACE_ID;
 // Prefer remote broker by default; allow override via env
 const brokerUrl = process.env.KADI_BROKER_URL || 'ws://kadi.build:8080';
 
+// Waypoint simplification: minimum distance between waypoints in meters
+// Lower = more detailed path, Higher = smoother but less accurate
+// Try values: 5m (detailed), 10m (balanced), 20m (smooth), 50m (very sparse)
+const MIN_WAYPOINT_DISTANCE = Number(process.env.MIN_WAYPOINT_DISTANCE) || 15; // meters - adjust this to control sparsity!
+
 /**
  * World Simulator Agent - Central Authority for Emergency Simulation
  *
@@ -376,7 +381,7 @@ export class WorldSimulatorAgent {
       request.destination,
       request.profile
     );
-    log(`Raw OSRM response: ${JSON.stringify(routingResult.waypoints, null, 2)}`)
+    log(`Simplified route has ${routingResult.waypoints?.length || 0} waypoints (MIN_DISTANCE=${MIN_WAYPOINT_DISTANCE}m)`)
 
     let distance = routingResult.distance;
     let baseDuration = routingResult.duration;
@@ -480,8 +485,8 @@ export class WorldSimulatorAgent {
     this.worldState.agents.delete(agentId);
     this.worldState.activeMovements.delete(agentId);
 
-    // Emit despawn event
-    await this.client.publishEvent('world.agent.despawned', {
+    // Emit despawn event (non-blocking)
+    this.publishInformationalEvent('world.agent.despawned', {
       agentId,
       type: agent.type,
       position: agent.position,
@@ -490,6 +495,18 @@ export class WorldSimulatorAgent {
 
     log(`🛫 Despawned agent: ${agentId}`);
     return { success: true };
+  }
+
+  /**
+   * Non-blocking event publish with error handling for informational events
+   */
+  private publishInformationalEvent(eventName: string, data: any): void {
+    try {
+      this.client.publishEvent(eventName, data);
+    } catch (error) {
+      log(`⚠️ Failed to publish ${eventName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Don't throw - just log and continue
+    }
   }
 
   private calculateDistance(pos1: Position, pos2: Position): number {
@@ -508,6 +525,35 @@ export class WorldSimulatorAgent {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return earthRadiusMeters * c;
+  }
+
+  /**
+   * Simplify waypoints by removing points that are too close together
+   */
+  private simplifyWaypoints(waypoints: Position[], minDistance: number = MIN_WAYPOINT_DISTANCE): Position[] {
+    if (waypoints.length <= 2) return waypoints;
+
+    const simplified: Position[] = [waypoints[0]]; // Always keep the first point
+    let lastKeptPoint = waypoints[0];
+
+    for (let i = 1; i < waypoints.length - 1; i++) {
+      const currentPoint = waypoints[i];
+      const distance = this.calculateDistance(lastKeptPoint, currentPoint);
+
+      // Only keep this point if it's far enough from the last kept point
+      if (distance >= minDistance) {
+        simplified.push(currentPoint);
+        lastKeptPoint = currentPoint;
+      }
+    }
+
+    // Always keep the last point to ensure we reach the exact destination
+    const lastPoint = waypoints[waypoints.length - 1];
+    if (this.calculateDistance(lastKeptPoint, lastPoint) > 0.001) {
+      simplified.push(lastPoint);
+    }
+
+    return simplified;
   }
 
   /**
@@ -667,6 +713,28 @@ export class WorldSimulatorAgent {
         }
       }
 
+      // Simplify waypoints to reduce density
+      const originalCount = waypoints.length;
+      waypoints = this.simplifyWaypoints(waypoints, MIN_WAYPOINT_DISTANCE);
+
+      if (originalCount > waypoints.length) {
+        log(`Simplified waypoints from ${originalCount} to ${waypoints.length} (removed ${originalCount - waypoints.length} points)`);
+
+        // Recalculate segment durations after simplification
+        if (waypoints.length > 1) {
+          const segDists: number[] = [];
+          let tot = 0;
+          for (let i = 0; i < waypoints.length - 1; i++) {
+            const d = this.calculateDistance(waypoints[i], waypoints[i + 1]);
+            segDists.push(d);
+            tot += d;
+          }
+          if (tot > 0) {
+            segmentDurations = segDists.map(d => (d / tot) * route.duration);
+          }
+        }
+      }
+
       return {
         distance: route.distance, // meters
         duration: route.duration, // seconds
@@ -799,6 +867,12 @@ export class WorldSimulatorAgent {
         }
 
         // Emit position update event for moving agents
+        // Include velocity for client-side prediction
+        const velocity = from && to ? {
+          lat: (to.lat - from.lat) * (1000 / movement.duration), // lat/second
+          lon: (to.lon - from.lon) * (1000 / movement.duration)  // lon/second
+        } : undefined;
+
         this.client.publishEvent('agent.position.updated', {
           agentId,
           lat: position.lat,
@@ -808,6 +882,7 @@ export class WorldSimulatorAgent {
           type: agent.type,
           time: currentTime,
           tick: this.tickCounter,
+          ...(velocity ? { velocity } : {}),
           ...(heading !== undefined ? { heading } : {})
         });
       }
@@ -969,8 +1044,8 @@ export class WorldSimulatorAgent {
         // Remove from active movements if moving
         this.worldState.activeMovements.delete(agentId);
 
-        // Emit expiration event
-        await this.client.publishEvent('world.agent.expired', {
+        // Emit expiration event (non-blocking)
+        this.publishInformationalEvent('world.agent.expired', {
           agentId,
           type: agent.type,
           position: agent.position,
@@ -1029,8 +1104,8 @@ export class WorldSimulatorAgent {
       });
     }
 
-    // Publish world tick
-    await this.client.publishEvent('world.tick', {
+    // Publish world tick (non-blocking - critical for maintaining tick rate)
+    this.publishInformationalEvent('world.tick', {
       time: currentTime,
       tick: this.tickCounter,
       dt: 0.1
@@ -1101,10 +1176,10 @@ export class WorldSimulatorAgent {
       fire.intensity = 0;
       fire.suppressionEffort = 1;
 
-      // Emit world.hazard.fire.updated with intensity 0
+      // Emit world.hazard.fire.updated with intensity 0 (non-blocking)
       const time = Date.now();
       const tick = this.tickCounter;
-      await this.client.publishEvent('world.hazard.fire.updated', {
+      this.publishInformationalEvent('world.hazard.fire.updated', {
         instanceId: this.instanceId,
         hazardId: request.fireId,
         position: fire.position,
@@ -1118,8 +1193,8 @@ export class WorldSimulatorAgent {
         log(`TRACE fire ${request.fireId}: suppressFire emitted intensity=0 (tick=${tick})`);
       }
 
-      // Emit fire extinguished event
-      await this.client.publishEvent('fire.extinguished', {
+      // Emit fire extinguished event (non-blocking)
+      this.publishInformationalEvent('fire.extinguished', {
         instanceId: this.instanceId,
         fireId: request.fireId,
         extinguishedBy: request.agentId,
@@ -1129,8 +1204,8 @@ export class WorldSimulatorAgent {
         tick
       });
 
-      // Also emit updated fire event for frontend (intensity 0)
-      await this.client.publishEvent('fire.updated', {
+      // Also emit updated fire event for frontend (intensity 0) - non-blocking
+      this.publishInformationalEvent('fire.updated', {
         instanceId: this.instanceId,
         id: request.fireId,
         longitude: fire.position.lon,
@@ -1149,8 +1224,8 @@ export class WorldSimulatorAgent {
         remainingIntensity: 0
       };
     } else {
-      // Fire still burning but weakened
-      await this.client.publishEvent('fire.updated', {
+      // Fire still burning but weakened (non-blocking)
+      this.publishInformationalEvent('fire.updated', {
         instanceId: this.instanceId,
         id: request.fireId,
         longitude: fire.position.lon,
@@ -1201,10 +1276,10 @@ export class WorldSimulatorAgent {
     // Add to world state
     this.worldState.hazards.set(request.hazardId, hazard);
 
-    // Emit appropriate spawn events based on hazard type
+    // Emit appropriate spawn events based on hazard type (non-blocking to prevent movement interference)
     if (request.type === 'fire') {
-      // Fire-specific events
-      await this.client.publishEvent('world.hazard.fire.spawned', {
+      // Fire-specific events - don't await to prevent blocking agent movements
+      this.client.publishEvent('world.hazard.fire.spawned', {
         instanceId: this.instanceId,
         hazardId: request.hazardId,
         type: 'fire',
@@ -1216,7 +1291,7 @@ export class WorldSimulatorAgent {
       });
 
       // Also publish as fire agent for frontend visualization
-      await this.client.publishEvent('fire.spawned', {
+      this.client.publishEvent('fire.spawned', {
         instanceId: this.instanceId,
         id: request.hazardId,
         type: 'fire',
@@ -1227,7 +1302,7 @@ export class WorldSimulatorAgent {
       });
     } else {
       // Generic hazard spawn event for non-fire hazards
-      await this.client.publishEvent('world.hazard.spawned', {
+      this.client.publishEvent('world.hazard.spawned', {
         instanceId: this.instanceId,
         hazardId: request.hazardId,
         type: request.type,
@@ -1274,6 +1349,7 @@ export class WorldSimulatorAgent {
       this.worldState.hazards.set(fireId, fire);
 
       const spawnTime = Date.now();
+      // Don't await to prevent blocking the tick loop
       this.client.publishEvent('world.hazard.fire.spawned', {
         instanceId: this.instanceId,
         hazardId: fireId,
