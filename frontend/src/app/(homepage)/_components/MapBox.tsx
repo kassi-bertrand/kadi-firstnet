@@ -10,6 +10,10 @@ const MAP_BOX_TOKEN = process.env.NEXT_PUBLIC_MAP_BOX_TOKEN;
 interface MapBoxProps {
   agentsMap: Map<string, Agent>;
 }
+const US_BOUNDS: [[number, number], [number, number]] = [
+  [-125.0011, 24.9493], // Southwest corner
+  [-66.9326, 49.5904],  // Northeast corner
+];
 
 export default function MapBox({ agentsMap }: MapBoxProps) {
   return (
@@ -23,59 +27,10 @@ export default function MapBox({ agentsMap }: MapBoxProps) {
         bearing: -20, // rotate slightly
       }}
       style={{ width: "100vw", height: "100vh" }}
+      maxBounds={US_BOUNDS} // 🔹 Restrict to US
       mapStyle="mapbox://styles/mapbox/dark-v11"
       onLoad={(e) => {
         const map = e.target;
-
-        // --- Terrain setup ---
-        map.addSource("mapbox-dem", {
-          type: "raster-dem",
-          url: "mapbox://mapbox.mapbox-terrain-dem-v1",
-          tileSize: 512,
-          maxzoom: 14,
-        });
-        map.setTerrain({ source: "mapbox-dem", exaggeration: 1.5 });
-
-        // --- Add 3D buildings ---
-        const layers = map.getStyle().layers;
-        const labelLayerId = layers.find(
-          (layer) => layer.type === "symbol" && layer.layout?.["text-field"]
-        )?.id;
-
-        map.addLayer(
-          {
-            id: "3d-buildings",
-            source: "composite",
-            "source-layer": "building",
-            filter: ["==", "extrude", "true"],
-            type: "fill-extrusion",
-            minzoom: 15,
-            paint: {
-              "fill-extrusion-color": "#aaa",
-              "fill-extrusion-height": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                15,
-                0,
-                15.05,
-                ["get", "height"],
-              ],
-              "fill-extrusion-base": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                15,
-                0,
-                15.05,
-                ["get", "min_height"],
-              ],
-              "fill-extrusion-opacity": 0.6,
-            },
-          },
-          labelLayerId
-        );
-
         // --- Add icons ---
         const addIcon = (name: string, url: string) => {
           if (!map.hasImage(name)) {

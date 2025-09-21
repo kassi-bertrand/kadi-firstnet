@@ -35,7 +35,7 @@ const brokerUrl = process.env.KADI_BROKER_URL || 'ws://kadi.build:8080';
 // Waypoint simplification: minimum distance between waypoints in meters
 // Lower = more detailed path, Higher = smoother but less accurate
 // Try values: 5m (detailed), 10m (balanced), 20m (smooth), 50m (very sparse)
-const MIN_WAYPOINT_DISTANCE = Number(process.env.MIN_WAYPOINT_DISTANCE) || 15; // meters - adjust this to control sparsity!
+const MIN_WAYPOINT_DISTANCE = Number(process.env.MIN_WAYPOINT_DISTANCE) || 50 // meters - adjust this to control sparsity!
 
 /**
  * World Simulator Agent - Central Authority for Emergency Simulation

@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 // app/api/kadi-proxy/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { KadiClient } from "@kadi.build/core";
@@ -326,7 +328,6 @@ export async function GET(req: NextRequest) {
   // Parse query params
   const url = new URL(req.url);
   const action = url.searchParams.get("action"); // e.g., "addAgent"
-  const type = url.searchParams.get("type") as Agent["type"] | undefined; // optional
 
   if (action === "addAgent" && client) {
     // Generate a random agent ID
@@ -370,9 +371,10 @@ export async function GET(req: NextRequest) {
     // Generate a unique hazard ID
     const hazardId = `fire_${Math.floor(Math.random() * 100000)}`;
 
-    // Random position around Deep Ellum area
-    const lat = 32.7825 + (Math.random() - 0.5) * 0.01;
-    const lon = -96.7849 + (Math.random() - 0.5) * 0.01;
+    const lat = 32.7767 + (Math.random() - 0.5) * 0.02;
+    const lon = -96.7970 + (Math.random() - 0.5) * 0.02;
+
+    console.log("Create fire");
 
     await client.callTool('world-simulator', 'spawnHazard', {
       hazardId,

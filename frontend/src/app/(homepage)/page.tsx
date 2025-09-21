@@ -1,12 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 "use client";
 import { useEffect, useState } from "react";
 import { Agent } from "@/types/agent";
 import MapBox from "./_components/MapBox";
 import Dashboard from "./_components/Dashboard";
-import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
-import { cn } from "@/lib/utils";
-import { ShimmerButton } from "@/components/ui/shimmer-button";
-import { Pause, UserPlus } from "lucide-react";
 import Remote from "./_components/Remote";
 
 export default function Home() {
@@ -34,7 +32,7 @@ export default function Home() {
           const next = new Map<string, Agent>();
           (data.agents as Agent[]).forEach((agent: Agent) => {
             // Normalize id/lat/lon fields
-            const id = (agent as any).id as string | undefined;
+            const id = (agent as Agent).id as string | undefined;
             const latitude = (agent as any).latitude ?? (agent as any).lat;
             const longitude = (agent as any).longitude ?? (agent as any).lon;
             if (id == null || latitude == null || longitude == null) return;

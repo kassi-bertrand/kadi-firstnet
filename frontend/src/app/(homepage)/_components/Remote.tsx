@@ -1,7 +1,28 @@
 import { ShimmerButton } from "@/components/ui/shimmer-button";
-import { UserPlus, Pause, Flame, Phone, LogOut } from "lucide-react";
+import { UserPlus, Flame } from "lucide-react";
 
 export default function Remote() {
+  const handleAddAgent = async () => {
+    try {
+      const res = await fetch("/api/kadi-proxy?action=addAgent");
+      if (!res.ok) throw new Error("Failed to add agent");
+      const data = await res.json();
+      console.log("Agent added:", data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSpawnFire = async () => {
+    try {
+      const res = await fetch("/api/kadi-proxy?action=spawnFire");
+      if (!res.ok) throw new Error("Failed to add agent");
+      const data = await res.json();
+      console.log("Agent added:", data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
   return (
     <div className="flex flex-col sm:hidden min-h-screen min-w-screen items-center justify-center gap-6 bg-black relative overflow-hidden">
       {/* Buttons */}
@@ -11,10 +32,11 @@ export default function Remote() {
           shimmerDuration="2.5s"
           background="rgba(0,0,0,1)"
           className="flex items-center gap-2 px-6 py-4 rounded-xl shadow-2xl"
+          onClick={handleAddAgent}
         >
           <UserPlus className="w-6 h-6 text-white" />
           <span className="text-center text-sm font-medium text-white lg:text-lg">
-            Add Agent
+            Join
           </span>
         </ShimmerButton>
 
@@ -22,7 +44,9 @@ export default function Remote() {
           shimmerColor="#ff4d4d"
           shimmerDuration="3s"
           background="rgba(0,0,0,1)"
-          className="flex items-center gap-2 px-6 py-4 rounded-xl shadow-2xl"
+          className="flex items-center gap-2 px-6 py-4 rounded-xl shadow-2xl w-60"
+          onClick={handleSpawnFire}
+
         >
           <Flame className="w-6 h-6 text-white" />
           <span className="text-center text-sm font-medium text-white lg:text-lg">
@@ -30,7 +54,7 @@ export default function Remote() {
           </span>
         </ShimmerButton>
 
-        <ShimmerButton
+        {/* <ShimmerButton
             shimmerColor="#4da6ff"
           shimmerDuration="2.8s"
           background="rgba(0,0,0,1)"
@@ -40,9 +64,9 @@ export default function Remote() {
           <span className="text-center text-sm font-medium text-white lg:text-lg">
             911
           </span>
-        </ShimmerButton>
+        </ShimmerButton> */}
 
-        <ShimmerButton
+        {/* <ShimmerButton
           shimmerColor="#bb00ff"
           shimmerDuration="2.5s"
           background="rgba(0,0,0,1)"
@@ -52,7 +76,7 @@ export default function Remote() {
           <span className="text-center text-sm font-medium text-white lg:text-lg">
             Disconnect
           </span>
-        </ShimmerButton>
+        </ShimmerButton> */}
       </div>
     </div>
   );

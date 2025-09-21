@@ -1,7 +1,7 @@
 "use client";
 
 import { Dock, DockIcon } from "@/components/ui/dock";
-import { UserPlus, Pause, Flame, Phone, LogOut } from "lucide-react";
+import { UserPlus, Flame } from "lucide-react";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 
 export default function Dashboard() {
@@ -42,20 +42,6 @@ export default function Dashboard() {
           <UserPlus className="text-white" />
         </ShimmerButton>
       </DockIcon>
-
-      {/* Pause */}
-      <DockIcon>
-        <ShimmerButton
-          shimmerColor="#ffcc00"
-          shimmerSize="0.05em"
-          shimmerDuration="2s"
-          background="rgba(0,0,0,1)"
-          className="p-3 rounded-full"
-        >
-          <Pause className="text-white" />
-        </ShimmerButton>
-      </DockIcon>
-
       {/* Fire */}
       <DockIcon>
         <ShimmerButton
@@ -67,32 +53,6 @@ export default function Dashboard() {
           onClick={handleSpawnFire}
         >
           <Flame className="text-white" />
-        </ShimmerButton>
-      </DockIcon>
-
-      {/* 911 */}
-      <DockIcon>
-        <ShimmerButton
-          shimmerColor="#4da6ff"
-          shimmerSize="0.05em"
-          shimmerDuration="2.8s"
-          background="rgba(0,0,0,1)"
-          className="p-3 rounded-full"
-        >
-          <Phone className="text-white" />
-        </ShimmerButton>
-      </DockIcon>
-
-      {/* Disconnect */}
-      <DockIcon>
-        <ShimmerButton
-          shimmerColor="#bb00ff"
-          shimmerSize="0.05em"
-          shimmerDuration="2.5s"
-          background="rgba(0,0,0,1)"
-          className="p-3 rounded-full"
-        >
-          <LogOut className="text-white" />
         </ShimmerButton>
       </DockIcon>
     </Dock>
