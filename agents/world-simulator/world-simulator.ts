@@ -467,6 +467,18 @@ export class WorldSimulatorAgent {
       status: request.status
     });
 
+    // Also emit initial position update so agent appears on map immediately
+    this.client.publishEvent('agent.position.updated', {
+      agentId: request.agentId,
+      lat: request.position.lat,
+      lon: request.position.lon,
+      moving: false,
+      status: request.status,
+      type: request.type,
+      time: currentTime,
+      tick: this.tickCounter
+    });
+
     const lifetimeInfo = request.lifetime ? ` (lifetime: ${request.lifetime / 1000}s)` : '';
     log(`Spawned ${request.agentId} at ${request.position.lat}, ${request.position.lon}${lifetimeInfo}`);
     return { success: true };
