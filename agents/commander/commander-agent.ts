@@ -10,6 +10,37 @@
  */
 
 import { KadiClient } from '@kadi.build/core';
+// NOTE: To keep commander self‑contained, we define lightweight interfaces here
+// that mirror the wire contract. This avoids cross‑package TS build issues.
+// See agents/shared/events.ts for the canonical shapes.
+interface FirefighterDispatchEvent {
+  dispatchId: string;
+  incidentId: string;
+  commanderId: string;
+  destination: { lat: number; lon: number };
+  urgency: 'normal' | 'urgent' | 'emergency';
+  description?: string;
+  deadlineMs?: number;
+}
+interface FirefighterDispatchAckEvent {
+  dispatchId: string;
+  firefighterId: string;
+  accepted: boolean;
+  reason?: string;
+  etaSeconds?: number;
+}
+interface FirefighterStatusEvent {
+  firefighterId: string;
+  status: 'at_base' | 'en_route' | 'on_scene' | 'extinguishing' | 'returning';
+  incidentId?: string;
+  timestamp: number;
+  position: { lat: number; lon: number };
+}
+interface FirefighterDispatchCancelEvent {
+  dispatchId: string;
+  incidentId: string;
+  reason?: string;
+}
 
 // TODO: Import LLM integration (OpenAI, Anthropic, etc.)
 // import { OpenAI } from 'openai';
@@ -39,6 +70,56 @@ interface ActiveIncident {
   description?: string;
 }
 
+// Operational data collection interfaces
+interface EventLog {
+  timestamp: number;
+  eventType: string;
+  agentId?: string;
+  incidentId?: string;
+  data: any;
+  description: string;
+}
+
+interface IncidentSummary {
+  incidentId: string;
+  type: string;
+  startTime: number;
+  endTime?: number;
+  location: { lat: number; lon: number };
+  unitsDispatched: string[];
+  responseTimeSeconds?: number;
+  resolutionTimeSeconds?: number;
+  outcome: string;
+  eventTimeline: EventLog[];
+}
+
+interface AgentActivitySummary {
+  agentId: string;
+  agentType: string;
+  totalEvents: number;
+  incidentsResponded: number;
+  statusChanges: Array<{ status: string; timestamp: number; duration?: number }>;
+  lastKnownPosition?: { lat: number; lon: number };
+  firstActivity?: number;
+  lastActivity?: number;
+}
+
+interface OperationalDataExport {
+  timeRange: { start: number; end: number };
+  totalEvents: number;
+  incidents: IncidentSummary[];
+  agentActivities: AgentActivitySummary[];
+  emergencyCalls: Array<{ timestamp: number; type: string; location: { lat: number; lon: number }; data: any }>;
+  rawEventLog: EventLog[];
+  metrics: {
+    totalIncidents: number;
+    totalAgentsActive: number;
+    averageResponseTime?: number;
+    incidentsByType: Record<string, number>;
+    busyHours: Array<{ hour: number; eventCount: number }>;
+  };
+}
+
 export class CommanderAgent {
   private client: KadiClient;
   private agentId: string;
@@ -49,6 +130,21 @@ export class CommanderAgent {
   private fireStations: FireStation[];
   private activeIncidents: Map<string, ActiveIncident> = new Map();
   private registeredFirefighters: Set<string> = new Set();
+
+  // Operational data collection
+  private eventLog: EventLog[] = [];
+  private incidentHistory: Map<string, IncidentSummary> = new Map();
+  private agentActivities: Map<string, AgentActivitySummary> = new Map();
+  private emergencyCallLog: Array<{ timestamp: number; type: string; location: { lat: number; lon: number }; data: any }> = [];
+  // Track hazards already being handled due to firefighter self-dispatch.
+  // Keyed by hazardId; value carries who took it and where it was observed.
+  private hazardAssignments: Map<string, { firefighterId: string; position: { lat: number; lon: number }; assignedAt: number }>
+    = new Map();
+  // Track pending dispatches awaiting acknowledgement
+  private pendingDispatches: Map<string, { incidentId: string; publishedAt: number; timeout?: NodeJS.Timeout }>
+    = new Map();
+  // Track which incident a firefighter is currently allocated to
+  private allocations: Map<string, { incidentId: string; dispatchId: string }> = new Map();
 
   // TODO: LLM integration
   // private llm: OpenAI;
@@ -165,6 +261,9 @@ export class CommanderAgent {
       // Subscribe to emergency events
       await this.subscribeToEvents();
 
+      // Register operational data reporting tool
+      await this.registerReportingTool();
+
       console.log(`✅ Commander ${this.agentId}: Incident command center operational`);
     } catch (error) {
       console.error(`❌ Commander ${this.agentId}: Failed to start:`, error);
@@ -211,13 +310,46 @@ export class CommanderAgent {
     }
 
     try {
-      // Subscribe to firefighter status updates
-      await this.client.subscribeToEvent('firefighter.status', async (event: any) => {
+      // Subscribe to firefighter status updates (heartbeat)
+      await this.client.subscribeToEvent('firefighter.status', async (event: FirefighterStatusEvent) => {
         await this.handleFirefighterStatus(event);
       });
       console.log('✅ Subscribed to firefighter.status events');
     } catch (error) {
       console.log('⚠️  firefighter.status subscription failed:', (error as Error).message);
+    }
+
+    try {
+      // Subscribe to firefighter dispatch acknowledgements
+      await this.client.subscribeToEvent('firefighter.dispatch.ack', async (ack: FirefighterDispatchAckEvent) => {
+        await this.handleDispatchAck(ack);
+      });
+      console.log('✅ Subscribed to firefighter.dispatch.ack events');
+    } catch (error) {
+      console.log('⚠️  firefighter.dispatch.ack subscription failed:', (error as Error).message);
+    }
+
+    try {
+      // Subscribe to self-dispatch notifications so we avoid duplicating effort.
+      await this.client.subscribeToEvent('firefighter.self_dispatch', async (evt: any) => {
+        // Inline shape (see agents/shared/events.ts): { firefighterId, hazardId, incidentId?, position, timestamp }
+        const hazardId = evt?.hazardId as string | undefined;
+        const firefighterId = evt?.firefighterId as string | undefined;
+        const position = evt?.position as { lat?: number; lon?: number } | undefined;
+        if (!hazardId || !firefighterId || !position?.lat || !position?.lon) return;
+
+        // Record the assignment. If an entry exists, we overwrite to reflect most recent claim.
+        this.hazardAssignments.set(hazardId, {
+          firefighterId,
+          position: { lat: position.lat, lon: position.lon },
+          assignedAt: evt?.timestamp || Date.now()
+        });
+
+        console.log(`🧭 Commander ${this.agentId}: Recorded self-dispatch — hazard ${hazardId} assigned to ${firefighterId}`);
+      });
+      console.log('✅ Subscribed to firefighter.self_dispatch events');
+    } catch (error) {
+      console.log('⚠️  firefighter.self_dispatch subscription failed:', (error as Error).message);
     }
 
     try {
@@ -236,9 +368,69 @@ export class CommanderAgent {
     // });
   }
 
+  // Data logging helper methods
+  private logEvent(eventType: string, description: string, agentId?: string, incidentId?: string, data?: any): void {
+    const eventLog: EventLog = {
+      timestamp: Date.now(),
+      eventType,
+      agentId,
+      incidentId,
+      data: data || {},
+      description
+    };
+    this.eventLog.push(eventLog);
+
+    // Keep only last 1000 events to prevent memory issues
+    if (this.eventLog.length > 1000) {
+      this.eventLog.shift();
+    }
+  }
+
+  private updateAgentActivity(agentId: string, agentType: string, event: string, position?: { lat: number; lon: number }): void {
+    if (!this.agentActivities.has(agentId)) {
+      this.agentActivities.set(agentId, {
+        agentId,
+        agentType,
+        totalEvents: 0,
+        incidentsResponded: 0,
+        statusChanges: [],
+        firstActivity: Date.now(),
+        lastActivity: Date.now()
+      });
+    }
+
+    const activity = this.agentActivities.get(agentId)!;
+    activity.totalEvents++;
+    activity.lastActivity = Date.now();
+    if (position) {
+      activity.lastKnownPosition = position;
+    }
+
+    // Track status changes
+    if (event.includes('status')) {
+      const statusMatch = event.match(/status.*?(\w+)/);
+      if (statusMatch) {
+        activity.statusChanges.push({
+          status: statusMatch[1],
+          timestamp: Date.now()
+        });
+      }
+    }
+  }
+
   private async handle911Call(event: any): Promise<void> {
     console.log(`📞 Commander ${this.agentId}: Received 911 call from ${event.callerId}`);
     console.log(`🔥 Emergency: ${event.emergency} at ${event.location.lat}, ${event.location.lon}`);
+
+    // Log emergency call
+    this.emergencyCallLog.push({
+      timestamp: Date.now(),
+      type: event.emergency || 'unknown',
+      location: event.location,
+      data: event
+    });
+
+    this.logEvent('emergency.call', `911 call: ${event.emergency} at ${event.location.lat}, ${event.location.lon}`, undefined, undefined, event);
 
     // Create incident record
     const incidentId = `incident_${Date.now()}`;
@@ -254,6 +446,24 @@ export class CommanderAgent {
     };
 
     this.activeIncidents.set(incidentId, incident);
+
+    // Create incident summary for history tracking
+    const incidentSummary: IncidentSummary = {
+      incidentId,
+      type: incident.type,
+      startTime: incident.reportedAt,
+      location: incident.location,
+      unitsDispatched: [],
+      outcome: 'reported',
+      eventTimeline: [{
+        timestamp: incident.reportedAt,
+        eventType: 'incident.reported',
+        incidentId,
+        data: event,
+        description: `${incident.type} incident reported at ${incident.location.lat}, ${incident.location.lon}`
+      }]
+    };
+    this.incidentHistory.set(incidentId, incidentSummary);
 
     // TODO: Use LLM to analyze the situation and determine response
     await this.analyzeAndRespond(incident);
@@ -289,19 +499,49 @@ export class CommanderAgent {
     console.log(`🚨 Commander ${this.agentId}: Dispatching resources to ${incident.incidentId}`);
 
     if (incident.type === 'fire') {
+      // STEP 0 — De-duplication guard: Skip dispatch if we already have a
+      // self-dispatched firefighter handling a hazard very close to this
+      // incident. We use a simple proximity check (e.g., 50 meters).
+      const proximityMeters = Number(process.env.SELF_DISPATCH_PROXIMITY_M || 50);
+      const claimedNearby = Array.from(this.hazardAssignments.values()).some((claim) => {
+        return this.calculateDistance(incident.location, claim.position) <= proximityMeters;
+      });
+      if (claimedNearby) {
+        console.log(`🛑 Commander ${this.agentId}: Skipping dispatch — nearby hazard already self-assigned within ${proximityMeters}m.`);
+        // Mark incident as dispatched to avoid repeated attempts; in a richer
+        // system we might track "in_progress_by=self_dispatch" instead.
+        incident.status = 'dispatched';
+        return;
+      }
+
       // Check if any firefighters are available
       const totalAvailable = this.fireStations.reduce((sum, station) => sum + station.availableUnits, 0);
 
       if (totalAvailable > 0) {
         console.log(`🚒 Commander ${this.agentId}: Dispatching ANY available firefighter to incident`);
 
-        // Send dispatch to ANY available firefighter (first one to respond wins)
-        await this.client.publishEvent('firefighter.dispatch', {
+        // Create a unique dispatch id. We avoid extra deps by combining time + random.
+        const dispatchId = `disp_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+
+        // Prepare the dispatch payload with a handshake contract.
+        const payload: FirefighterDispatchEvent = {
+          dispatchId,
           incidentId: incident.incidentId,
+          commanderId: this.agentId,
           destination: incident.location,
           urgency: 'emergency',
-          description: `Fire emergency at ${incident.location.lat.toFixed(4)}, ${incident.location.lon.toFixed(4)}`
-        });
+          description: `Fire emergency at ${incident.location.lat.toFixed(4)}, ${incident.location.lon.toFixed(4)}`,
+          // Ask for an ack quickly; will re‑dispatch if no acceptance.
+          deadlineMs: Number(process.env.DISPATCH_ACK_TIMEOUT_MS || 5000)
+        };
+
+        // Publish dispatch to all available firefighters; first valid ACK wins.
+        await this.client.publishEvent('firefighter.dispatch', payload);
+
+        // Track pending dispatch and set a re‑dispatch timeout.
+        const timeoutMs = payload.deadlineMs || 5000;
+        const timer = setTimeout(() => this.handleDispatchTimeout(dispatchId), timeoutMs);
+        this.pendingDispatches.set(dispatchId, { incidentId: incident.incidentId, publishedAt: Date.now(), timeout: timer });
 
         incident.status = 'dispatched';
         console.log(`📡 Dispatch order sent for incident ${incident.incidentId}`);
@@ -323,10 +563,17 @@ export class CommanderAgent {
   }
 
   private calculateDistance(pos1: { lat: number; lon: number }, pos2: { lat: number; lon: number }): number {
-    // Simple Euclidean distance - TODO: use proper geographic distance
-    const dlat = pos1.lat - pos2.lat;
-    const dlon = pos1.lon - pos2.lon;
-    return Math.sqrt(dlat * dlat + dlon * dlon);
+    // Haversine distance (clear ASCII variable names for readability)
+    const R = 6371e3; // meters
+    const lat1 = pos1.lat * Math.PI / 180;
+    const lat2 = pos2.lat * Math.PI / 180;
+    const dLat = (pos2.lat - pos1.lat) * Math.PI / 180;
+    const dLon = (pos2.lon - pos1.lon) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1) * Math.cos(lat2) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
   }
 
   private getAvailableResources() {
@@ -352,8 +599,159 @@ export class CommanderAgent {
     }, 5000);
   }
 
-  private async handleFirefighterStatus(event: any): Promise<void> {
+  // Operational data export tool
+  private generateOperationalReport(timeRange?: { start: number; end: number }): OperationalDataExport {
+    const now = Date.now();
+    const startTime = timeRange?.start || (now - 24 * 60 * 60 * 1000); // Default: last 24 hours
+    const endTime = timeRange?.end || now;
+
+    // Filter events by time range
+    const filteredEvents = this.eventLog.filter(event =>
+      event.timestamp >= startTime && event.timestamp <= endTime
+    );
+
+    const filteredCalls = this.emergencyCallLog.filter(call =>
+      call.timestamp >= startTime && call.timestamp <= endTime
+    );
+
+    // Process incidents
+    const incidents: IncidentSummary[] = Array.from(this.incidentHistory.values())
+      .filter(incident => incident.startTime >= startTime && incident.startTime <= endTime);
+
+    // Process agent activities
+    const agentActivities: AgentActivitySummary[] = Array.from(this.agentActivities.values())
+      .filter(activity => activity.lastActivity && activity.lastActivity >= startTime);
+
+    // Calculate metrics
+    const incidentsByType: Record<string, number> = {};
+    incidents.forEach(incident => {
+      incidentsByType[incident.type] = (incidentsByType[incident.type] || 0) + 1;
+    });
+
+    const resolvedIncidents = incidents.filter(i => i.endTime);
+    const averageResponseTime = resolvedIncidents.length > 0
+      ? resolvedIncidents.reduce((sum, i) => sum + (i.responseTimeSeconds || 0), 0) / resolvedIncidents.length
+      : undefined;
+
+    // Calculate busy hours
+    const hourlyEvents: Record<number, number> = {};
+    filteredEvents.forEach(event => {
+      const hour = new Date(event.timestamp).getHours();
+      hourlyEvents[hour] = (hourlyEvents[hour] || 0) + 1;
+    });
+
+    const busyHours = Object.entries(hourlyEvents)
+      .map(([hour, count]) => ({ hour: parseInt(hour), eventCount: count }))
+      .sort((a, b) => b.eventCount - a.eventCount);
+
+    return {
+      timeRange: { start: startTime, end: endTime },
+      totalEvents: filteredEvents.length,
+      incidents,
+      agentActivities,
+      emergencyCalls: filteredCalls,
+      rawEventLog: filteredEvents,
+      metrics: {
+        totalIncidents: incidents.length,
+        totalAgentsActive: agentActivities.length,
+        averageResponseTime,
+        incidentsByType,
+        busyHours
+      }
+    };
+  }
+
+  /**
+   * OPERATIONAL DATA ANALYSIS - LLM Query Examples
+   *
+   * With the structured data this tool provides, an LLM can answer
+   * sophisticated
+   * operational questions that help improve emergency response effectiveness:
+   *
+   * PERFORMANCE ANALYSIS:
+   * - "Which firefighter had the fastest average response time today?"
+   * - "Are there any agents who declined multiple dispatches? Why?"
+   * - "What's our current unit availability vs. call volume?"
+   * - "Which fire station area had the most incidents this week?"
+   *
+   * OPERATIONAL PATTERNS:
+   * - "What are our peak emergency hours and do we have adequate staffing?"
+   * - "How often do firefighters self-dispatch vs. get commanded?"
+   * - "Are there geographic clusters of incidents we should investigate?"
+   * - "What's the correlation between fire intensity and response time?"
+   *
+   * INCIDENT ANALYSIS:
+   * - "Summarize today's major incidents and their outcomes"
+   * - "Were there any incidents where multiple units responded to the same
+   *  location?"
+   * - "How long did it take to resolve each type of emergency?"
+   * - "Which incidents required the most resources?"
+   *
+   * RESOURCE OPTIMIZATION:
+   * - "Based on call patterns, should we reposition units for better coverage?"
+   * - "Are certain firefighters getting overworked while others are idle?"
+   * - "What's our success rate for different types of emergencies?"
+   * - "Do we need additional units in high-activity areas?"
+   *
+   * TRAINING & DEVELOPMENT:
+   * - "Which agents might benefit from additional response training?"
+   * - "Are there communication gaps in our dispatch process?"
+   * - "What scenarios should we practice more in training exercises?"
+   *
+   * COMPLIANCE & REPORTING:
+   * - "Generate an after-action report for incident X with timeline"
+   * - "What were our response times compared to city standards?"
+   * - "Prepare a weekly summary for the fire chief"
+   * - "Document resource utilization for budget planning"
+   *
+   * PREDICTIVE INSIGHTS:
+   * - "Based on recent patterns, when should we expect the next busy period?"
+   * - "Are there weather/time correlations with incident types?"
+   * - "Should we adjust shift schedules based on activity patterns?"
+   *
+   * The raw data structure supports all these analyses by providing:
+   * - Timestamped event sequences for timeline reconstruction
+   * - Agent-specific performance metrics and location tracking
+   * - Incident categorization with resolution outcomes
+   * - Resource allocation and response time measurements
+   * - Cross-referenced data for pattern identification
+   */
+
+  // Register KADI tool for external access
+  async registerReportingTool(): Promise<void> {
+    try {
+      this.client.registerTool('getOperationalData', async (params: any) => {
+        try {
+          const { timeRange } = params || {};
+          console.log(`📊 Commander: Generating operational report for ${timeRange?.start ? 'custom range' : 'last 24h'}`);
+
+          const report = this.generateOperationalReport(timeRange);
+
+          console.log(`📊 Report generated: ${report.totalEvents} events, ${report.incidents.length} incidents, ${report.agentActivities.length} active agents`);
+
+          return {
+            success: true,
+            data: report
+          };
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          };
+        }
+      });
+      console.log('✅ Registered operational reporting tool: getOperationalData');
+    } catch (error) {
+      console.log('❌ Failed to register reporting tool:', error);
+    }
+  }
+
+  private async handleFirefighterStatus(event: FirefighterStatusEvent): Promise<void> {
     console.log(`🚒 Commander ${this.agentId}: Firefighter ${event.firefighterId} status: ${event.status}`);
+
+    // Log firefighter status update
+    this.logEvent('firefighter.status', `Firefighter ${event.firefighterId} status: ${event.status}`, event.firefighterId, event.incidentId, event);
+    this.updateAgentActivity(event.firefighterId, 'firefighter', `status ${event.status}`, event.position);
 
     const firefighterId = event.firefighterId;
     const isNewFirefighter = !this.registeredFirefighters.has(firefighterId);
@@ -425,8 +823,88 @@ export class CommanderAgent {
       }
     }
 
+    // Also clear any self-dispatch record for this hazard so future incidents
+    // near this area aren't blocked by stale assignments.
+    if (event.fireId && this.hazardAssignments.has(event.fireId)) {
+      this.hazardAssignments.delete(event.fireId);
+      console.log(`🧹 Commander ${this.agentId}: Cleared hazard assignment for ${event.fireId}`);
+    }
+
     // TODO: Update fire status in world simulator
     // TODO: Notify other systems about successful suppression
+  }
+
+  /**
+   * Handle an acknowledgement for a dispatch. The first ACCEPTED ack wins; we
+   * cancel any other pending dispatch attempts for the same incident.
+   */
+  private async handleDispatchAck(ack: FirefighterDispatchAckEvent): Promise<void> {
+    // Log dispatch acknowledgment
+    const ackResult = ack.accepted ? 'accepted' : 'declined';
+    this.logEvent('firefighter.dispatch.ack', `Firefighter ${ack.firefighterId} ${ackResult} dispatch ${ack.dispatchId}`, ack.firefighterId, undefined, ack);
+
+    if (ack.accepted) {
+      // Update agent activity for incident response
+      const activity = this.agentActivities.get(ack.firefighterId);
+      if (activity) {
+        activity.incidentsResponded++;
+      }
+    }
+
+    const pending = this.pendingDispatches.get(ack.dispatchId);
+    if (!pending) {
+      // Unknown or already resolved dispatch. Ignore politely.
+      console.log(`ℹ️ Commander: Received ACK for unknown/expired dispatch ${ack.dispatchId}`);
+      return;
+    }
+
+    if (!ack.accepted) {
+      console.log(`❎ Commander: Firefighter declined dispatch ${ack.dispatchId} (reason=${ack.reason || 'unspecified'})`);
+      return; // Keep waiting for another ACK or timeout
+    }
+
+    // We have a winner: record allocation and clear the timeout.
+    if (pending.timeout) clearTimeout(pending.timeout);
+    this.pendingDispatches.delete(ack.dispatchId);
+
+    this.allocations.set(ack.firefighterId, {
+      incidentId: pending.incidentId,
+      dispatchId: ack.dispatchId
+    });
+
+    console.log(`✅ Commander: Dispatch ${ack.dispatchId} accepted by ${ack.firefighterId}${ack.etaSeconds ? ` (ETA ${ack.etaSeconds}s)` : ''}`);
+
+    // Optional: proactively cancel other pending dispatches for the same incident.
+    for (const [otherId, info] of this.pendingDispatches) {
+      if (info.incidentId === pending.incidentId) {
+        if (info.timeout) clearTimeout(info.timeout);
+        this.pendingDispatches.delete(otherId);
+        const cancel: FirefighterDispatchCancelEvent = {
+          dispatchId: otherId,
+          incidentId: pending.incidentId,
+          reason: 'accepted_by_another_unit'
+        };
+        this.client.publishEvent('firefighter.dispatch.cancel', cancel);
+      }
+    }
+  }
+
+  /**
+   * Handle case where no firefighter acknowledges a dispatch swiftly; the
+   * simplest strategy here is to re‑emit the dispatch by calling analyze/dispatch
+   * again so we can try another wave (or escalate policy later).
+   */
+  private async handleDispatchTimeout(dispatchId: string): Promise<void> {
+    const pending = this.pendingDispatches.get(dispatchId);
+    if (!pending) return;
+    this.pendingDispatches.delete(dispatchId);
+
+    console.log(`⏰ Commander: Dispatch ${dispatchId} timed out without ACK; will attempt re-dispatch for incident ${pending.incidentId}`);
+
+    const incident = this.activeIncidents.get(pending.incidentId);
+    if (incident && incident.status !== 'resolved') {
+      await this.simpleDispatch(incident);
+    }
   }
 
   // TODO: LLM integration methods
