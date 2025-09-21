@@ -1,0 +1,25 @@
+{
+  "name": "civilian-ability",
+  "version": "0.0.1",
+  "description": "Civilian ability for spawning and managing civilian agents with autonomous walking behavior",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "preflight": "",
+    "setup": "npm install",
+    "start": "node index.js",
+    "test": "echo 'No tests yet'"
+  },
+  "keywords": [
+    "kadi",
+    "ability",
+    "civilian",
+    "agent",
+    "simulation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@kadi.build/core": "0.0.1-alpha.9"
+  }
+}

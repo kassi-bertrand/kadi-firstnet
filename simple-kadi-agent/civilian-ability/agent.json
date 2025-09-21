@@ -1,0 +1,157 @@
+{
+  "name": "civilian-ability",
+  "kind": "ability",
+  "version": "0.0.1",
+  "license": "MIT",
+  "description": "Civilian ability for spawning and managing civilian agents in Dallas area with autonomous walking behavior.",
+  "repo": "",
+  "brokers": {
+    "local": "ws://127.0.0.1:8080",
+    "remote": "ws://kadi.build:8080"
+  },
+  "abilities": {},
+  "scripts": {
+    "preflight": "",
+    "setup": "npm install",
+    "start": "node index.js",
+    "stop": "",
+    "clean": "rm -rf node_modules && rm -rf abilities"
+  },
+  "exports": [
+    {
+      "name": "spawn_civilian",
+      "title": "Spawn Civilian",
+      "description": "Spawn a civilian agent at a random location in Dallas area with autonomous walking behavior.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "civilianId": {
+            "type": "string",
+            "description": "Optional civilian ID, auto-generated if not provided"
+          },
+          "agentType": {
+            "type": "string",
+            "description": "Type of agent to spawn (default: civilian)"
+          },
+          "preferredLocation": {
+            "type": "object",
+            "properties": {
+              "latitude": {
+                "type": "number"
+              },
+              "longitude": {
+                "type": "number"
+              }
+            },
+            "description": "Optional preferred spawn location"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "civilianId": {
+            "type": "string"
+          },
+          "Location": {
+            "type": "object"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "walk",
+      "title": "Walk Civilian",
+      "description": "Make a civilian walk from one location to another using real routing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "latitude": {
+                "type": "number"
+              },
+              "longitude": {
+                "type": "number"
+              }
+            },
+            "required": ["latitude", "longitude"]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "latitude": {
+                "type": "number"
+              },
+              "longitude": {
+                "type": "number"
+              }
+            },
+            "required": ["latitude", "longitude"]
+          },
+          "civilianId": {
+            "type": "string",
+            "description": "ID of the civilian to move"
+          }
+        },
+        "required": ["from", "to", "civilianId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object"
+          },
+          "to": {
+            "type": "object"
+          },
+          "distance": {
+            "type": "number"
+          },
+          "duration": {
+            "type": "number"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "location": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "name": "stop_civilian",
+      "title": "Stop Civilian",
+      "description": "Stop and remove a civilian agent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "civilianId": {
+            "type": "string",
+            "description": "ID of the civilian to stop"
+          }
+        },
+        "required": ["civilianId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "civilianId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

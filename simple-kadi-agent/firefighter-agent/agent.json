@@ -1,0 +1,21 @@
+{
+  "name": "firefighter agent",
+  "kind": "agent",
+  "version": "0.0.1",
+  "license": "MIT",
+  "description": "a firefighter agent with custom behavior for Dallas area",
+  "brokers": {
+    "local": "ws://127.0.0.1:8080",
+    "remote": "ws://146.190.121.213:8080"
+  },
+  "scripts": {
+    "preflight": "",
+    "setup": "npm install && npm run build",
+    "build": "tsc",
+    "start": "npm run build && node dist/index.js",
+    "dev": "npx tsx index.ts",
+    "stop": "",
+    "clean": "rm -rf node_modules dist && rm -rf abilities"
+  }
+}
+

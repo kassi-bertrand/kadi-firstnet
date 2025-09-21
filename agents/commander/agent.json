@@ -1,0 +1,203 @@
+{
+  "name": "commander-agent",
+  "description": "Incident Commander agent for managing emergencies, dispatching resources, and tracking incidents in the KADI simulation.",
+  "version": "1.0.0",
+  "author": "Your Name",
+  "main": "commander-agent.ts",
+  "type": "module",
+  "dependencies": {
+    "@kadi/core": "*"
+  },
+  "tools": [
+    {
+      "name": "dispatchFirefighter",
+      "description": "Dispatch a firefighter to an incident location.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "firefighterId": { "type": "string" },
+          "incidentId": { "type": "string" },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number" },
+              "lon": { "type": "number" }
+            },
+            "required": ["lat", "lon"]
+          }
+        },
+        "required": ["firefighterId", "incidentId", "destination"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
+    },
+    {
+      "name": "cancelDispatch",
+      "description": "Cancel a firefighter dispatch for an incident.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dispatchId": { "type": "string" },
+          "incidentId": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["dispatchId", "incidentId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
+    },
+    {
+      "name": "getIncidentSummary",
+      "description": "Get a summary of an incident, including status, location, and units dispatched.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "incidentId": { "type": "string" }
+        },
+        "required": ["incidentId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "incidentId": { "type": "string" },
+          "status": { "type": "string" },
+          "location": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number" },
+              "lon": { "type": "number" }
+            },
+            "required": ["lat", "lon"]
+          },
+          "unitsDispatched": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["incidentId", "status", "location", "unitsDispatched", "success"]
+      }
+    },
+    {
+      "name": "exportOperationalData",
+      "description": "Export operational data including incident history and agent activity summaries.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "incidents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "incidentId": { "type": "string" },
+                "status": { "type": "string" },
+                "location": {
+                  "type": "object",
+                  "properties": {
+                    "lat": { "type": "number" },
+                    "lon": { "type": "number" }
+                  },
+                  "required": ["lat", "lon"]
+                },
+                "unitsDispatched": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["incidentId", "status", "location", "unitsDispatched"]
+            }
+          },
+          "agentActivities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agentId": { "type": "string" },
+                "incidentsResponded": { "type": "number" },
+                "statusChanges": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "status": { "type": "string" },
+                      "timestamp": { "type": "number" },
+                      "duration": { "type": "number" }
+                    },
+                    "required": ["status", "timestamp"]
+                  }
+                },
+                "lastKnownPosition": {
+                  "type": "object",
+                  "properties": {
+                    "lat": { "type": "number" },
+                    "lon": { "type": "number" }
+                  },
+                  "required": ["lat", "lon"]
+                }
+              },
+              "required": ["agentId", "incidentsResponded", "statusChanges", "lastKnownPosition"]
+            }
+          },
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["incidents", "agentActivities", "success"]
+      }
+    },
+    {
+      "name": "getAgentStatus",
+      "description": "Get the status and last known position of an agent (firefighter or other).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" }
+        },
+        "required": ["agentId"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" },
+          "position": {
+            "type": "object",
+            "properties": {
+              "lat": { "type": "number" },
+              "lon": { "type": "number" }
+            },
+            "required": ["lat", "lon"]
+          },
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        },
+        "required": ["success"]
+      }
+    }
+  ],
+   "scripts": {
+    "preflight": "",
+    "setup": "npm install && npm run build",
+    "build": "tsc",
+    "start": "node dist/commander-agent.js",
+    "dev": "DEBUG=world-simulator tsx watch commander-agent.ts",
+    "stop": "",
+    "clean": "rm -rf node_modules dist && rm -rf abilities"
+  }
+}

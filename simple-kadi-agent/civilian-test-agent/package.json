@@ -1,0 +1,24 @@
+{
+  "name": "civilian-test-agent",
+  "version": "0.0.1",
+  "description": "Test agent for civilian behavior system",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "npx tsx index.ts",
+    "clean": "rm -rf dist node_modules"
+  },
+  "dependencies": {
+    "@kadi.build/core": "^0.0.1-alpha.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
